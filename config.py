@@ -10,6 +10,7 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from constants import DEFAULT_LMSTUDIO_BASE, DEFAULT_OLLAMA_VERSION
+from constants import DEFAULT_TEMPERATURE
 
 
 def _derive_rest_base(openai_base: str) -> str:
@@ -74,6 +75,9 @@ class Settings(BaseSettings):
     verify_ssl: bool = True
     max_request_bytes: Optional[int] = None
     model_cache_ttl_seconds: float = 30.0
+    default_temperature: float = DEFAULT_TEMPERATURE
+    default_system_prompt: Optional[str] = None
+    default_stop: Optional[str] = None
 
     @property
     def rest_base(self) -> str:
@@ -236,6 +240,33 @@ class Settings(BaseSettings):
         if parsed < 0:
             raise ValueError("MODEL_CACHE_TTL_SECONDS must be >= 0")
         return parsed
+
+    @field_validator("default_temperature", mode="before")
+    @classmethod
+    def _normalize_default_temperature(cls, value: Any) -> float:
+        if value is None or value == "":
+            return DEFAULT_TEMPERATURE
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("DEFAULT_TEMPERATURE must be a number") from exc
+        if parsed < 0:
+            raise ValueError("DEFAULT_TEMPERATURE must be >= 0")
+        return parsed
+
+    @field_validator("default_system_prompt", mode="before")
+    @classmethod
+    def _normalize_default_system_prompt(cls, value: Any) -> Optional[str]:
+        if value is None or value == "":
+            return None
+        return str(value)
+
+    @field_validator("default_stop", mode="before")
+    @classmethod
+    def _normalize_default_stop(cls, value: Any) -> Optional[str]:
+        if value is None or value == "":
+            return None
+        return str(value)
 
     @model_validator(mode="after")
     def _finalize_bases(self) -> "Settings":

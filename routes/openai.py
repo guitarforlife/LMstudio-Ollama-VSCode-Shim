@@ -19,9 +19,8 @@ from backend import (
     post_openai_json,
     preflight_lmstudio,
 )
-from constants import DEFAULT_TEMPERATURE
 from deps import get_client, get_model_cache
-from state import STREAM_CONTENT_TYPE, logger
+from state import STREAM_CONTENT_TYPE, logger, settings
 from utils.http import prepare_body
 
 router = APIRouter()
@@ -32,7 +31,7 @@ class ChatCompletionRequest(BaseModel):  # pylint: disable=too-few-public-method
 
     model: str
     messages: List[Dict[str, Any]] = Field(default_factory=list)
-    temperature: float = DEFAULT_TEMPERATURE
+    temperature: float = Field(default_factory=lambda: settings.default_temperature)
     stream: bool = True
     ttl: Optional[int] = None
     keep_alive: Optional[Any] = None
@@ -110,7 +109,8 @@ class CompletionRequest(BaseModel):  # pylint: disable=too-few-public-methods
 
     model: str
     prompt: Optional[Any] = None
-    temperature: float = DEFAULT_TEMPERATURE
+    temperature: float = Field(default_factory=lambda: settings.default_temperature)
+    stop: Optional[Any] = None
     stream: bool = True
     ttl: Optional[int] = None
     keep_alive: Optional[Any] = None
@@ -125,6 +125,8 @@ async def openai_completions(
 ) -> Response:
     """OpenAI-compatible text completions endpoint (streaming supported)."""
     body = req.model_dump(exclude_none=True)
+    if "stop" not in body and settings.default_stop is not None:
+        body["stop"] = settings.default_stop
 
     body["model"] = await model_selector.ensure_selected(client, model_cache, req.model)
     body = prepare_body(body, req.keep_alive)
