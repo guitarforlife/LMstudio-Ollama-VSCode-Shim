@@ -28,6 +28,8 @@ logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
 logging.getLogger("httpx").setLevel(logging.DEBUG if settings.debug else logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
+SHUTDOWN_IN_PROGRESS = False
+
 LMSTUDIO_OPENAI_BASE = settings.lmstudio_base.rstrip("/")
 LMSTUDIO_REST_BASE = settings.rest_base.rstrip("/")
 OLLAMA_VERSION = settings.ollama_version

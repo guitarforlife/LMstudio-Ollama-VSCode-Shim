@@ -64,7 +64,7 @@ class Settings(BaseSettings):
 
     # If a client asks to "unload immediately" (keep_alive=0), we can't force an immediate unload
     # via REST; we approximate by setting ttl to this many seconds for that request.
-    unload_ttl_seconds: int = 1
+    unload_ttl_seconds: int = 300
     host: str = "0.0.0.0"
     port: int = 11434
 

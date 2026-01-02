@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Awaitable, Callable, Optional, TYPE_CHECKING
 from uuid import uuid4
@@ -71,6 +72,19 @@ async def request_id_middleware(
         request_id_ctx.reset(token)
     response.headers["X-Request-Id"] = request_id
     return response
+
+
+async def suppress_shutdown_cancel(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Suppress CancelledError during shutdown to keep logs clean."""
+    try:
+        return await call_next(request)
+    except asyncio.CancelledError:
+        shutdown_event = getattr(request.app.state, "shutdown_event", None)
+        if shutdown_event is not None and shutdown_event.is_set():
+            return Response(status_code=204)
+        raise
 
 
 PUBLIC_PATHS = {

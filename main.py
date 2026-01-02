@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Callable, Optional
+from typing import Any, AsyncGenerator, Callable, Optional, cast
 
 import httpx
 import uvicorn
@@ -27,6 +27,7 @@ from middleware import (
     prometheus_middleware,
     request_id_middleware,
     request_size_limit_middleware,
+    suppress_shutdown_cancel,
 )
 from routes import health_router, ollama_router, openai_router, version_router
 from utils.factory import coerce_client_factory
@@ -127,6 +128,10 @@ async def lifespan(
     try:
         yield
     finally:
+        state.SHUTDOWN_IN_PROGRESS = True
+        shutdown_event = getattr(fastapi_app.state, "shutdown_event", None)
+        if shutdown_event is not None:
+            shutdown_event.set()
         await _close_client(client)
 
 
@@ -162,6 +167,7 @@ async def backend_unavailable_handler(_request: Request, exc: Exception) -> JSON
     return JSONResponse({"error": "unknown_error", "detail": str(exc)}, status_code=500)
 
 
+
 def create_app() -> FastAPI:
     """Factory that builds the FastAPI instance with all routers & middleware."""
     fastapi_app = FastAPI(
@@ -169,6 +175,7 @@ def create_app() -> FastAPI:
         version=SHIM_VERSION,
         lifespan=lifespan,
     )
+    fastapi_app.state.shutdown_event = asyncio.Event()
     fastapi_app.add_middleware(
         CORSMiddleware,
         allow_origins=state.settings.allowed_origins,
@@ -177,6 +184,7 @@ def create_app() -> FastAPI:
         allow_credentials=False,
     )
 
+    fastapi_app.middleware("http")(suppress_shutdown_cancel)
     fastapi_app.middleware("http")(request_size_limit_middleware)
     fastapi_app.middleware("http")(request_id_middleware)
     fastapi_app.middleware("http")(api_key_middleware)
@@ -199,7 +207,12 @@ app = create_app()
 def run() -> None:
     """Start the Uvicorn server for the shim."""
     try:
-        uvicorn.run(app, host=state.settings.host, port=state.settings.port)
+        uvicorn.run(
+            app,
+            host=state.settings.host,
+            port=state.settings.port,
+            timeout_graceful_shutdown=cast(int | None, 0.5),
+        )
     except KeyboardInterrupt:
         pass
 

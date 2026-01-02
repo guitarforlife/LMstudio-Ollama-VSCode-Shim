@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -104,6 +105,7 @@ async def _generate_stream(
     backend_client: BackendClient,
     payload: Dict[str, Any],
     response_model: str,
+    shutdown_event: asyncio.Event,
 ) -> AsyncGenerator[str, None]:
     """Stream generate responses as NDJSON."""
     buffer = b""
@@ -118,6 +120,8 @@ async def _generate_stream(
         log_label="generate",
         on_error=on_error,
     ):
+        if shutdown_event.is_set():
+            return
         buffer += chunk
         while b"\n" in buffer:
             line, buffer = buffer.split(b"\n", 1)
@@ -160,6 +164,7 @@ async def _chat_stream(
     backend_client: BackendClient,
     payload: Dict[str, Any],
     response_model: str,
+    shutdown_event: asyncio.Event,
 ) -> AsyncGenerator[str, None]:
     """Stream chat responses as NDJSON."""
     buffer = b""
@@ -175,6 +180,8 @@ async def _chat_stream(
         log_label="chat",
         on_error=on_error,
     ):
+        if shutdown_event.is_set():
+            return
         buffer += chunk
         while b"\n" in buffer:
             line, buffer = buffer.split(b"\n", 1)
@@ -316,6 +323,7 @@ class GenerateResponse(BaseModel):  # pylint: disable=too-few-public-methods
 @router.post("/api/generate", response_model=GenerateResponse)
 async def generate(
     req: GenerateRequest,
+    request: Request,
     client: httpx.AsyncClient = Depends(get_client),
     model_cache=Depends(get_model_cache),
 ) -> Response:
@@ -347,7 +355,13 @@ async def generate(
     backend_client = BackendClient(client, model_cache)
 
     return StreamingResponse(
-        _generate_stream(client, backend_client, payload, response_model),
+        _generate_stream(
+            client,
+            backend_client,
+            payload,
+            response_model,
+            request.app.state.shutdown_event,
+        ),
         media_type="application/x-ndjson",
     )
 
@@ -374,6 +388,7 @@ class ChatRequest(OllamaBaseModel):  # pylint: disable=too-few-public-methods
 @router.post("/api/chat")
 async def chat(
     req: ChatRequest,
+    request: Request,
     client: httpx.AsyncClient = Depends(get_client),
     model_cache=Depends(get_model_cache),
 ) -> Response:
@@ -409,7 +424,13 @@ async def chat(
     backend_client = BackendClient(client, model_cache)
 
     return StreamingResponse(
-        _chat_stream(client, backend_client, payload, response_model),
+        _chat_stream(
+            client,
+            backend_client,
+            payload,
+            response_model,
+            request.app.state.shutdown_event,
+        ),
         media_type="application/x-ndjson",
     )
 

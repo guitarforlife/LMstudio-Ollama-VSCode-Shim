@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import Field
 
@@ -60,6 +60,7 @@ async def openai_models(
 @router.post("/v1/chat/completions")
 async def openai_chat(
     req: ChatCompletionRequest,
+    request: Request,
     client: httpx.AsyncClient = Depends(get_client),
     model_cache=Depends(get_model_cache),
 ) -> Response:
@@ -88,16 +89,19 @@ async def openai_chat(
     def on_error(message: str) -> Iterable[bytes]:
         return [openai_stream_error(message), b"data: [DONE]\n\n"]
 
-    return StreamingResponse(
-        backend_api.stream_post_raw(
+    async def stream_with_shutdown() -> AsyncGenerator[bytes, None]:
+        async for chunk in backend_api.stream_post_raw(
             client,
             backend_client.openai_url("/chat/completions"),
             body,
             log_label="openai_chat",
             on_error=on_error,
-        ),
-        media_type=STREAM_CONTENT_TYPE,
-    )
+        ):
+            if request.app.state.shutdown_event.is_set():
+                break
+            yield chunk
+
+    return StreamingResponse(stream_with_shutdown(), media_type=STREAM_CONTENT_TYPE)
 
 
 class CompletionRequest(OllamaBaseModel):  # pylint: disable=too-few-public-methods
@@ -114,6 +118,7 @@ class CompletionRequest(OllamaBaseModel):  # pylint: disable=too-few-public-meth
 @router.post("/v1/completions")
 async def openai_completions(
     req: CompletionRequest,
+    request: Request,
     client: httpx.AsyncClient = Depends(get_client),
     model_cache=Depends(get_model_cache),
 ) -> Response:
@@ -135,13 +140,16 @@ async def openai_completions(
     def on_error(message: str) -> Iterable[bytes]:
         return [openai_stream_error(message), b"data: [DONE]\n\n"]
 
-    return StreamingResponse(
-        backend_api.stream_post_raw(
+    async def stream_with_shutdown() -> AsyncGenerator[bytes, None]:
+        async for chunk in backend_api.stream_post_raw(
             client,
             backend_client.openai_url("/completions"),
             body,
             log_label="openai_completions",
             on_error=on_error,
-        ),
-        media_type=STREAM_CONTENT_TYPE,
-    )
+        ):
+            if request.app.state.shutdown_event.is_set():
+                break
+            yield chunk
+
+    return StreamingResponse(stream_with_shutdown(), media_type=STREAM_CONTENT_TYPE)
