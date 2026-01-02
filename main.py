@@ -287,6 +287,7 @@ def run() -> None:
             port=state.settings.port,
             timeout_graceful_shutdown=cast(int | None, 0.5),
             workers=workers,
+            loop="uvloop" if UVLOOP is not None else "asyncio",
         )
     except KeyboardInterrupt:
         pass

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import json
 import time
 from collections import OrderedDict
 from typing import Any, AsyncGenerator, Callable, Dict, Iterable, List, Optional, Tuple
@@ -16,6 +15,7 @@ from client import BackendError, BackendUnavailableError, RequestOptions, reques
 from constants import ERROR_MODEL_NOT_LOADED
 from logging_config import logger, request_id_ctx
 from state import LMSTUDIO_OPENAI_BASE, LMSTUDIO_REST_BASE, settings
+from utils import json
 from utils.types import BackendLike
 from utils.time import now
 

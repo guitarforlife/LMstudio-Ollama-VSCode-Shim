@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -10,6 +9,7 @@ import httpx
 
 from config import Settings
 from logging_config import logger, request_id_ctx
+from utils import json
 from utils.retry import BackendUnavailableError, retry
 from utils.types import BackendLike
 

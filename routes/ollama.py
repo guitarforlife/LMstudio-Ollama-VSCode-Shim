@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional
 
 import httpx
@@ -23,6 +22,7 @@ from backend import (
 from backend_api import api as backend_api
 from deps import get_client, get_model_cache
 from state import logger, settings
+from utils import json
 from utils.model_selection import prepare_payload
 from utils.pydantic import OllamaBaseModel
 from utils.time import now

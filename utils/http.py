@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, Optional, Literal
 
 import httpx
@@ -10,6 +9,7 @@ from fastapi import HTTPException
 
 from logging_config import logger
 from state import settings
+from utils import json
 from utils.model_selection import raise_if_unloaded
 from utils.retry import BackendUnavailableError, retry
 
