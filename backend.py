@@ -6,9 +6,11 @@ import asyncio
 import logging
 import json
 import time
+from collections import OrderedDict
 from typing import Any, AsyncGenerator, Callable, Dict, Iterable, List, Optional, Tuple
 
 import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from client import BackendError, BackendUnavailableError, RequestOptions, request_json
 from constants import ERROR_MODEL_NOT_LOADED
@@ -26,21 +28,21 @@ class ModelCache:
         """Initialize the cache with a TTL in seconds."""
         self._ttl_seconds = ttl_seconds
         self._cached_at = 0.0
-        self._payload: Optional[List[Dict[str, Any]]] = None
+        self._cached_parsed: Optional[Tuple["ModelEntry", ...]] = None
 
-    def get(self) -> Optional[List[Dict[str, Any]]]:
+    def get(self) -> Optional[Tuple["ModelEntry", ...]]:
         """Return cached models if fresh, otherwise None."""
-        if not self._payload or self._ttl_seconds <= 0:
+        if not self._cached_parsed or self._ttl_seconds <= 0:
             return None
         if time.monotonic() - self._cached_at > self._ttl_seconds:
             return None
-        return list(self._payload)
+        return self._cached_parsed
 
-    def set(self, payload: List[Dict[str, Any]]) -> None:
+    def set(self, payload: Iterable["ModelEntry"]) -> None:
         """Store model payload in the cache."""
         if self._ttl_seconds <= 0:
             return
-        self._payload = list(payload)
+        self._cached_parsed = tuple(payload)
         self._cached_at = time.monotonic()
 
 
@@ -60,7 +62,7 @@ class BackendClient:
         """Build the REST URL for a given path."""
         return f"{LMSTUDIO_REST_BASE}{path}"
 
-    async def models(self) -> List[Dict[str, Any]]:
+    async def models(self) -> Tuple["ModelEntry", ...]:
         """Return models from the backend with caching."""
         return await lm_models(self.client, model_cache=self.model_cache)
 
@@ -70,10 +72,35 @@ def ollama_base_fields(model: str) -> Dict[str, Any]:
     return {"model": model, "created_at": now()}
 
 
-def _extract_model_id(entry: Dict[str, Any]) -> str:
+class ModelEntry(BaseModel):
+    """Typed representation of an LM Studio model entry."""
+
+    model_config = ConfigDict(extra="allow")
+    id: Optional[str] = None
+    name: Optional[str] = None
+    model: Optional[str] = None
+    state: Optional[str] = None
+    status: Optional[str] = None
+    loaded: Optional[bool] = None
+    is_loaded: Optional[bool] = None
+    active: Optional[bool] = None
+    owned_by: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+    size: Optional[int] = None
+    digest: Optional[str] = None
+
+
+class ModelsPayload(BaseModel):
+    """Typed response payload for model listings."""
+
+    model_config = ConfigDict(extra="allow")
+    data: Optional[List[ModelEntry]] = None
+    models: Optional[List[ModelEntry]] = None
+
+
+def _extract_model_id(entry: ModelEntry) -> str:
     """Extract a model identifier from a model entry."""
-    for key in ("id", "name", "model"):
-        value = entry.get(key)
+    for value in (entry.id, entry.name, entry.model):
         if value:
             return str(value)
     return ""
@@ -86,13 +113,10 @@ def _ollama_model_name(name: str) -> str:
     return str(name.split(":")[0])
 
 
-def _entry_is_loaded(entry: Dict[str, Any]) -> bool:
+def _entry_is_loaded(entry: ModelEntry) -> bool:
     """Return True if a model entry appears loaded/active."""
-    for key in ("loaded", "is_loaded", "active"):
-        if entry.get(key) is True:
-            return True
-    state = (entry.get("state") or entry.get("status") or "").lower()
-    return state in {"loaded", "active", "ready", "running"}
+    state = entry.state or entry.status or ""
+    return state.lower() in {"loaded", "active", "ready", "running"}
 
 
 class ModelSelector:  # pylint: disable=too-few-public-methods
@@ -101,7 +125,25 @@ class ModelSelector:  # pylint: disable=too-few-public-methods
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._active_model: Optional[str] = None
-        self._cache: Dict[str, str] = {}
+        self._cache: "OrderedDict[str, str]" = OrderedDict()
+        self._cache_size = int(getattr(settings, "model_selector_cache_size", 0) or 0)
+
+    def _cache_get(self, requested: str) -> Optional[str]:
+        """Return cached model id and refresh LRU position."""
+        cached = self._cache.get(requested)
+        if cached is None:
+            return None
+        self._cache.move_to_end(requested)
+        return cached
+
+    def _cache_set(self, requested: str, model_id: str) -> None:
+        """Store cached model id and enforce LRU size."""
+        if self._cache_size <= 0:
+            return
+        self._cache[requested] = model_id
+        self._cache.move_to_end(requested)
+        while len(self._cache) > self._cache_size:
+            self._cache.popitem(last=False)
 
     async def ensure_selected(
         self, client: BackendLike, model_cache: Optional[ModelCache], requested: str
@@ -111,7 +153,7 @@ class ModelSelector:  # pylint: disable=too-few-public-methods
             return requested
 
         async with self._lock:
-            cached = self._cache.get(requested)
+            cached = self._cache_get(requested)
             if cached is not None:
                 model_id = cached
                 entry = None
@@ -125,9 +167,9 @@ class ModelSelector:  # pylint: disable=too-few-public-methods
             resolved_id = model_id
 
         async with self._lock:
-            cached = self._cache.get(requested)
+            cached = self._cache_get(requested)
             if cached is None:
-                self._cache[requested] = resolved_id
+                self._cache_set(requested, resolved_id)
                 model_id = resolved_id
             else:
                 model_id = cached
@@ -306,9 +348,26 @@ async def preflight_lmstudio(client: BackendLike) -> None:
     raise BackendUnavailableError("LMStudio backend unavailable")
 
 
+def _parse_model_payload(payload: Any) -> List[ModelEntry]:
+    """Parse model payload into typed entries."""
+    try:
+        if isinstance(payload, dict):
+            parsed = ModelsPayload.model_validate(payload)
+            if parsed.data is not None:
+                return parsed.data
+            if parsed.models is not None:
+                return parsed.models
+            return []
+        if isinstance(payload, list):
+            return [ModelEntry.model_validate(item) for item in payload]
+    except ValidationError:
+        return []
+    return []
+
+
 async def lm_models(
     client: BackendLike, model_cache: Optional[ModelCache] = None
-) -> List[Dict[str, Any]]:
+) -> Tuple[ModelEntry, ...]:
     """Retrieve model list from LM Studio."""
     if model_cache:
         cached = model_cache.get()
@@ -327,9 +386,11 @@ async def lm_models(
         )
         models = _parse_model_payload(payload)
         if models:
+            parsed = tuple(models)
             if model_cache:
-                model_cache.set(models)
-            return models
+                model_cache.set(parsed)
+                return model_cache.get() or parsed
+            return parsed
     except BackendError as exc:
         if exc.status_code != 404 and logger.isEnabledFor(logging.DEBUG):
             logger.debug("REST models failed: %s", exc.detail)
@@ -344,22 +405,11 @@ async def lm_models(
         ),
     )
     models = _parse_model_payload(payload)
+    parsed = tuple(models)
     if model_cache:
-        model_cache.set(models)
-    return models
-
-
-def _parse_model_payload(payload: Any) -> List[Dict[str, Any]]:
-    if isinstance(payload, dict):
-        data = payload.get("data")
-        if isinstance(data, list):
-            return data
-        models = payload.get("models")
-        if isinstance(models, list):
-            return models
-    if isinstance(payload, list):
-        return payload
-    return []
+        model_cache.set(parsed)
+        return model_cache.get() or parsed
+    return parsed
 
 
 async def _model_exists_and_state(
@@ -377,13 +427,14 @@ async def _model_exists_and_state(
         if not mid:
             continue
         if mid == model or mid == base or _ollama_model_name(mid) == base:
-            return True, str(entry.get("state") or entry.get("status") or "")
+            state = entry.state or entry.status or ""
+            return True, str(state)
     return False, None
 
 
 async def _resolve_model_id(
     client: BackendLike, model_cache: Optional[ModelCache], requested: str
-) -> Tuple[str, Optional[Dict[str, Any]]]:
+) -> Tuple[str, Optional[ModelEntry]]:
     """Resolve a requested model name to a known LM Studio model id if possible."""
     if not requested:
         return requested, None
@@ -394,19 +445,18 @@ async def _resolve_model_id(
     except BackendError:
         return requested, None
 
+    fallback: Optional[Tuple[str, ModelEntry]] = None
     for entry in models:
         mid = _extract_model_id(entry)
         if not mid:
             continue
         if mid in {requested, base}:
             return str(mid), entry
+        if fallback is None and _ollama_model_name(mid) == base:
+            fallback = (str(mid), entry)
 
-    for entry in models:
-        mid = _extract_model_id(entry)
-        if not mid:
-            continue
-        if _ollama_model_name(mid) == base:
-            return str(mid), entry
+    if fallback is not None:
+        return fallback
 
     logger.warning("Requested model %s not found; using as-is", requested)
     return str(requested), None
@@ -421,7 +471,7 @@ async def model_exists_and_state(
 
 async def resolve_model_id(
     client: httpx.AsyncClient, model_cache: Optional[ModelCache], requested: str
-) -> Tuple[str, Optional[Dict[str, Any]]]:
+) -> Tuple[str, Optional[ModelEntry]]:
     """Public wrapper for resolving model identifiers."""
     return await _resolve_model_id(client, model_cache, requested)
 

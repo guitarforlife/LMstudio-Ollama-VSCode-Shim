@@ -49,7 +49,7 @@ async def openai_models(
                 "id": model_id,
                 "object": "model",
                 "created": created,
-                "owned_by": entry.get("owned_by", "lmstudio"),
+                "owned_by": entry.owned_by or "lmstudio",
             }
         )
         seen.add(model_id)

@@ -30,12 +30,12 @@ async def test_resolve_model_id_matches_tagged_model(monkeypatch: pytest.MonkeyP
     """Resolve tagged model names to known entries."""
 
     async def fake_models(_client, _model_cache=None, **_kwargs):  # type: ignore[override]
-        return [{"id": "foo:latest"}, {"name": "bar"}]
+        return [backend.ModelEntry(id="foo:latest"), backend.ModelEntry(name="bar")]
 
     monkeypatch.setattr(backend, "lm_models", fake_models)
     model_id, entry = await backend._resolve_model_id(cast(Any, object()), None, "foo")
     assert model_id == "foo:latest"
-    assert entry == {"id": "foo:latest"}
+    assert entry and entry.id == "foo:latest"
 
 
 def test_ttl_processor_parsing_and_copy() -> None:

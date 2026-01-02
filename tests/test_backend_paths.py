@@ -32,7 +32,7 @@ async def test_resolve_model_id(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(backend, "LMSTUDIO_OPENAI_BASE", "http://test/v1")
         model_id, entry = await backend._resolve_model_id(client, None, "model-a:latest")
     assert model_id == "model-a"
-    assert entry and entry["id"] == "model-a"
+    assert entry and entry.id == "model-a"
 
 
 @pytest.mark.asyncio

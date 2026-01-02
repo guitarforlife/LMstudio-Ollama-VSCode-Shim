@@ -44,7 +44,7 @@ try:
 except ModuleNotFoundError:
     UVLOOP = None
 
-_ORIGINAL_UVICORN_SUBPROCESS_STARTED: Optional[Callable[..., None]] = None
+_UVICORN_SUBPROCESS_ORIGINAL: Optional[Callable[..., None]] = None
 
 
 def _suppress_spawned_process_interrupts() -> None:
@@ -65,17 +65,18 @@ _suppress_spawned_process_interrupts()
 
 def _wrapped_subprocess_started(*args: Any, **kwargs: Any) -> None:
     """Invoke uvicorn subprocess entrypoint with shutdown suppression."""
-    if _ORIGINAL_UVICORN_SUBPROCESS_STARTED is None:
-        return
     try:
-        _ORIGINAL_UVICORN_SUBPROCESS_STARTED(*args, **kwargs)
+        original = _UVICORN_SUBPROCESS_ORIGINAL
+        if original is None:
+            return
+        original(*args, **kwargs)
     except (KeyboardInterrupt, asyncio.CancelledError):
         return
 
 
 def _patch_uvicorn_subprocess() -> None:
     """Wrap uvicorn subprocess entrypoint to suppress shutdown tracebacks."""
-    global _ORIGINAL_UVICORN_SUBPROCESS_STARTED
+    global _UVICORN_SUBPROCESS_ORIGINAL  # pylint: disable=global-statement
     try:
         uvicorn_subprocess = importlib.import_module("uvicorn._subprocess")
     except ModuleNotFoundError:
@@ -85,7 +86,7 @@ def _patch_uvicorn_subprocess() -> None:
     if original is None or getattr(original, "_shim_wrapped", False):
         return
 
-    _ORIGINAL_UVICORN_SUBPROCESS_STARTED = original
+    _UVICORN_SUBPROCESS_ORIGINAL = original
     setattr(_wrapped_subprocess_started, "_shim_wrapped", True)
     uvicorn_subprocess.subprocess_started = _wrapped_subprocess_started
 

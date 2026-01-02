@@ -19,7 +19,7 @@ async def test_openai_models(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure /v1/models returns a normalized list."""
 
     async def fake_models(_client, _model_cache=None, **_kwargs):  # type: ignore[override]
-        return [{"id": "model-a"}, {"name": "model-b"}]
+        return [backend.ModelEntry(id="model-a"), backend.ModelEntry(name="model-b")]
 
     monkeypatch.setattr(backend_api.api, "models", fake_models)
 

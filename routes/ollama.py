@@ -244,14 +244,14 @@ async def tags(
         if not model_id:
             continue
         name = model_id if ":" in model_id else f"{model_id}:latest"
-        details = entry.get("details", {"family": model_id, "state": entry.get("state")})
+        details = entry.details or {"family": model_id, "state": entry.state}
         tags_list.append(
             {
                 "name": name,
                 "model": name,
                 "modified_at": now(),
-                "size": int(entry.get("size", 0) or 0),
-                "digest": entry.get("digest", ""),
+                "size": int(entry.size or 0),
+                "digest": entry.digest or "",
                 "details": details,
             }
         )

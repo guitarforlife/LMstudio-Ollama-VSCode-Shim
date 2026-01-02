@@ -43,6 +43,7 @@ Environment variables:
 - `SHIM_MAX_REQUEST_BYTES`: Reject requests above this size (default: unset).
 - `SHIM_MODEL_CACHE_TTL_SECONDS`: Cache TTL for model list responses (default: `30`).
 - `SHIM_STREAM_CHUNK_SIZE`: Streaming chunk size in bytes (default: `8192`).
+- `SHIM_MODEL_SELECTOR_CACHE_SIZE`: Max cached model name resolutions (default: `256`).
 - `SHIM_DEFAULT_TEMPERATURE`: Default temperature for generation requests (default: `0.8`).
 - `SHIM_DEFAULT_SYSTEM_PROMPT`: Default system prompt for `/api/chat` when not provided.
 - `SHIM_DEFAULT_STOP`: Default stop value for completion requests when not provided.

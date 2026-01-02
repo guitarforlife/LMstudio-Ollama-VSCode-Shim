@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     max_request_bytes: Optional[int] = None
     model_cache_ttl_seconds: float = 30.0
     stream_chunk_size: int = 8192
+    model_selector_cache_size: int = 256
     default_temperature: float = DEFAULT_TEMPERATURE
     default_system_prompt: Optional[str] = None
     default_stop: Optional[str] = None
