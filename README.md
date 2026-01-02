@@ -30,7 +30,7 @@ Environment variables:
 - `SHIM_LMSTUDIO_REST_BASE`: Optional REST base URL override (default: derived from `SHIM_LMSTUDIO_BASE`).
 - `SHIM_HTTP_TIMEOUT`: Request timeout in seconds. Use `0` for no limit, `>= 0.1` otherwise (default: `300`).
 - `SHIM_DEBUG`: Set to `1` for debug logging (default: `0`).
-- `SHIM_ALLOWED_ORIGINS`: Comma-separated list of allowed CORS origins (default: `http://localhost,http://127.0.0.1`).
+- `SHIM_ALLOWED_ORIGINS`: Comma-separated list of allowed CORS origins (default: `http://localhost,http://127.0.0.1`). If empty, CORS middleware allows no origins.
 - `SHIM_OLLAMA_VERSION`: Reported Ollama version header (default: `0.13.5`).
 - `SHIM_API_KEY`: If set, require `Authorization: Bearer <key>` for non-health endpoints.
 - `SHIM_DEFAULT_TTL_SECONDS`: Default TTL injected when keep_alive is not provided (default: `0`).

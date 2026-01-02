@@ -6,8 +6,8 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 import backend
+import backend_api
 import main
-import routes.ollama as ollama_routes
 
 
 @pytest.mark.asyncio
@@ -17,7 +17,7 @@ async def test_openai_models(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_models(_client, _model_cache=None, **_kwargs):  # type: ignore[override]
         return [{"id": "model-a"}, {"name": "model-b"}]
 
-    monkeypatch.setattr(backend, "lm_models", fake_models)
+    monkeypatch.setattr(backend_api.api, "models", fake_models)
 
     async with main.lifespan(main.app):
         transport = ASGITransport(app=main.app)
@@ -42,8 +42,8 @@ async def test_generate_non_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     ) -> dict:
         return {"choices": [{"text": "hello"}]}
 
-    monkeypatch.setattr(main.model_selector, "ensure_selected", fake_select)
-    monkeypatch.setattr(ollama_routes, "post_openai_json", fake_post)
+    monkeypatch.setattr(backend_api.api, "ensure_selected", fake_select)
+    monkeypatch.setattr(backend_api.api, "post_openai_json", fake_post)
 
     async with main.lifespan(main.app):
         transport = ASGITransport(app=main.app)

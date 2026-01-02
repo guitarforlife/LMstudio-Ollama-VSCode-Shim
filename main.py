@@ -1,6 +1,8 @@
-"""shim - Ollama to LM Studio bridge.
+"""FastAPI entry point for the LMStudio-Ollama shim.
 
-Primary implementation lives here; `shim/main.py` re-exports for module usage.
+This is the canonical app implementation. `shim/main.py` is a thin wrapper that
+re-exports the same symbols for module-based execution and backward
+compatibility.
 """
 
 from __future__ import annotations
@@ -27,20 +29,14 @@ from middleware import (
     request_size_limit_middleware,
 )
 from routes import health_router, ollama_router, openai_router, version_router
-from logging_config import request_id_ctx
-from state import (
-    LMSTUDIO_OPENAI_BASE,
-    LMSTUDIO_REST_BASE,
-    OLLAMA_VERSION,
-    SHIM_VERSION,
-    logger,
-    settings,
-)
+from utils.factory import coerce_client_factory
+import state
+from state import LMSTUDIO_OPENAI_BASE, LMSTUDIO_REST_BASE, OLLAMA_VERSION, SHIM_VERSION, logger
 
-VERSION = SHIM_VERSION
+settings = state.settings
 
 
-async def lm_models(client: httpx.AsyncClient):
+async def lm_models(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     """Backward-compatible model list helper for tests."""
     return await backend.lm_models(client, model_cache=None)
 
@@ -66,18 +62,25 @@ async def _retry_request(
     *args: Any,
     retries: int = 0,
 ) -> httpx.Response:
+    backoff = state.settings.request_retry_backoff
     for attempt in range(retries + 1):
         try:
             return await fn(*args)
         except httpx.RequestError as exc:
             if attempt >= retries:
                 raise BackendUnavailableError("LMStudio backend unavailable") from exc
-            await asyncio.sleep(0.25)
+            if backoff:
+                await asyncio.sleep(backoff)
     raise BackendUnavailableError("LMStudio backend unavailable")
 
 
-def _handle_backend_error(exc: Exception) -> NoReturn:
-    raise HTTPException(status_code=502, detail="LMStudio backend unavailable") from exc
+def _handle_backend_error(exc: Exception, url: Optional[str] = None) -> NoReturn:
+    detail = "LMStudio backend unavailable"
+    extra = {}
+    if url:
+        extra["url"] = url
+    logger.error(detail, extra=extra, exc_info=True)
+    raise HTTPException(status_code=502, detail=detail) from exc
 
 
 async def _proxy_get(
@@ -88,7 +91,7 @@ async def _proxy_get(
     try:
         response = await _retry_request(client.get, url, retries=retries)
     except BackendUnavailableError as exc:
-        _handle_backend_error(exc)
+        _handle_backend_error(exc, url=url)
 
     if response.is_error:
         raise HTTPException(
@@ -107,15 +110,15 @@ async def _proxy_post_json(
     try:
         response = await _retry_request(lambda: client.post(url, json=payload), retries=retries)
     except BackendUnavailableError as exc:
-        _handle_backend_error(exc)
+        _handle_backend_error(exc, url=url)
 
     if response.is_error:
         model = ""
         if response.status_code in (400, 404):
             model = str(payload.get("model") or "")
         if model:
-            exists, state = await _model_exists_and_state(client, model)
-            if exists and state and state.lower() in {"not-loaded", "unloaded"}:
+            exists, model_state = await _model_exists_and_state(client, model)
+            if exists and model_state and model_state.lower() in {"not-loaded", "unloaded"}:
                 raise HTTPException(
                     status_code=409,
                     detail=(
@@ -135,30 +138,6 @@ async def _proxy_post_json(
         raise HTTPException(status_code=502, detail="LMStudio returned invalid JSON") from exc
 
 
-def _coerce_client_factory(factory: Any) -> Callable[[], httpx.AsyncClient]:
-    """Validate or wrap a client factory.
-
-    The argument may be a callable returning an ``httpx.AsyncClient`` or ``None``.
-    """
-    if not callable(factory):
-        def default_factory() -> httpx.AsyncClient:
-            return default_client_factory(settings)
-
-        return default_factory
-
-    def wrapped_factory() -> httpx.AsyncClient:
-        client = factory()
-        if not isinstance(client, httpx.AsyncClient):
-            logger.error(
-                "client_factory returned unexpected type",
-                extra={"request_id": request_id_ctx.get("-")},
-            )
-            raise TypeError("client_factory must return httpx.AsyncClient")
-        return client
-
-    return wrapped_factory
-
-
 @asynccontextmanager
 async def lifespan(
     fastapi_app: FastAPI,
@@ -166,23 +145,39 @@ async def lifespan(
 ) -> AsyncGenerator[None, None]:
     """Manage startup and shutdown lifecycle for the FastAPI app."""
     client_factory_attr = getattr(fastapi_app.state, "client_factory", None)
-    client_factory = _coerce_client_factory(client_factory or client_factory_attr)
+    resolved_factory = coerce_client_factory(
+        client_factory or client_factory_attr,
+        default_factory=lambda: default_client_factory(state.settings),
+        logger=logger,
+    )
     try:
-        client = client_factory()
+        client = await resolved_factory()
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.error("Failed to create HTTP client", exc_info=True)
         raise RuntimeError("Failed to start shim") from exc
 
     fastapi_app.state.client = client
-    fastapi_app.state.model_cache = ModelCache(settings.model_cache_ttl_seconds)
-    logger.info("Shim started - Ollama version %s", OLLAMA_VERSION)
-    logger.info("LM Studio OpenAI base: %s", LMSTUDIO_OPENAI_BASE)
-    logger.info("LM Studio REST base:   %s", LMSTUDIO_REST_BASE)
+    fastapi_app.state.model_cache = ModelCache(state.settings.model_cache_ttl_seconds)
+    logger.info(
+        "Shim started",
+        extra={"version": OLLAMA_VERSION},
+    )
+    logger.info(
+        "LM Studio OpenAI base",
+        extra={"base_url": LMSTUDIO_OPENAI_BASE},
+    )
+    logger.info(
+        "LM Studio REST base",
+        extra={"base_url": LMSTUDIO_REST_BASE},
+    )
     try:
         yield
     finally:
         try:
-            await client.aclose()
+            timeout = state.settings.http_timeout
+            if timeout is None:
+                timeout = 5.0
+            await asyncio.wait_for(client.aclose(), timeout=timeout)
         except Exception:  # pylint: disable=broad-exception-caught
             logger.exception("Error closing HTTP client")
 
@@ -194,7 +189,7 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins,
+    allow_origins=state.settings.allowed_origins,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
     allow_credentials=False,
@@ -232,7 +227,7 @@ async def backend_unavailable_handler(_request, exc: BackendUnavailableError) ->
 def run() -> None:
     """Start the Uvicorn server for the shim."""
     try:
-        uvicorn.run(app, host=settings.host, port=settings.port)
+        uvicorn.run(app, host=state.settings.host, port=state.settings.port)
     except KeyboardInterrupt:
         pass
 

@@ -15,18 +15,14 @@ from backend import (
     _entry_is_loaded,
     _extract_model_id,
     _ollama_model_name,
-    _stream_post_raw,
-    lm_models,
-    model_selector,
     ollama_base_fields,
     ollama_done,
     ollama_error,
-    post_openai_json,
-    preflight_lmstudio,
 )
+from backend_api import api as backend_api
 from deps import get_client, get_model_cache
 from state import logger, settings
-from utils.http import prepare_body
+from utils.http import inject_ttl_if_missing
 from utils.time import now
 
 router = APIRouter()
@@ -114,7 +110,7 @@ async def _generate_stream(
     def on_error(message: str) -> Iterable[bytes]:
         return [ollama_error(response_model, message).encode()]
 
-    async for chunk in _stream_post_raw(
+    async for chunk in backend_api.stream_post_raw(
         client,
         backend_client.openai_url("/completions"),
         payload,
@@ -171,7 +167,7 @@ async def _chat_stream(
     def on_error(message: str) -> Iterable[bytes]:
         return [ollama_error(response_model, message).encode()]
 
-    async for chunk in _stream_post_raw(
+    async for chunk in backend_api.stream_post_raw(
         client,
         backend_client.openai_url("/chat/completions"),
         payload,
@@ -233,7 +229,7 @@ async def tags(
     model_cache=Depends(get_model_cache),
 ) -> Dict[str, Any]:
     """Return Ollama-compatible tag list (models)."""
-    models = await lm_models(client, model_cache=model_cache)
+    models = await backend_api.models(client, model_cache)
     tags_list = []
     for entry in models:
         model_id = _extract_model_id(entry)
@@ -326,7 +322,7 @@ async def generate(
 ) -> Response:
     """Generate text from a prompt (Ollama-compatible)."""
     response_model = req.model or _ollama_model_name(req.model)
-    model = await model_selector.ensure_selected(client, model_cache, req.model)
+    model = await backend_api.ensure_selected(client, model_cache, req.model)
 
     stop_value = req.stop if req.stop is not None else settings.default_stop
     payload: Dict[str, Any] = {
@@ -336,10 +332,10 @@ async def generate(
         "stop": stop_value,
         "stream": req.stream,
     }
-    payload = prepare_body(payload, req.keep_alive)
+    payload = inject_ttl_if_missing(payload, req.keep_alive)
 
     if not payload["stream"]:
-        r = await post_openai_json(client, model_cache, "/completions", payload)
+        r = await backend_api.post_openai_json(client, model_cache, "/completions", payload)
         text = r["choices"][0].get("text", "")
         return JSONResponse(
             {
@@ -350,7 +346,7 @@ async def generate(
             }
         )
 
-    await preflight_lmstudio(client)
+    await backend_api.preflight(client)
     backend_client = BackendClient(client, model_cache)
 
     return StreamingResponse(
@@ -388,7 +384,7 @@ async def chat(
 ) -> Response:
     """Chat with a model using messages (Ollama-compatible)."""
     response_model = req.model or _ollama_model_name(req.model)
-    model = await model_selector.ensure_selected(client, model_cache, req.model)
+    model = await backend_api.ensure_selected(client, model_cache, req.model)
 
     messages = _build_chat_messages(req)
     if req.system is None and settings.default_system_prompt:
@@ -402,10 +398,10 @@ async def chat(
         "tools": req.tools,
         "tool_choice": req.tool_choice,
     }
-    payload = prepare_body(payload, req.keep_alive)
+    payload = inject_ttl_if_missing(payload, req.keep_alive)
 
     if not payload["stream"]:
-        r = await post_openai_json(client, model_cache, "/chat/completions", payload)
+        r = await backend_api.post_openai_json(client, model_cache, "/chat/completions", payload)
         msg = r["choices"][0].get("message", {})
         return JSONResponse(
             {
@@ -416,7 +412,7 @@ async def chat(
             }
         )
 
-    await preflight_lmstudio(client)
+    await backend_api.preflight(client)
     backend_client = BackendClient(client, model_cache)
 
     return StreamingResponse(
@@ -441,11 +437,11 @@ async def embeddings(
     model_cache=Depends(get_model_cache),
 ) -> Dict[str, Any]:
     """Generate embeddings for a prompt (Ollama-compatible)."""
-    model = await model_selector.ensure_selected(client, model_cache, req.model)
+    model = await backend_api.ensure_selected(client, model_cache, req.model)
     payload: Dict[str, Any] = {"model": model, "input": req.prompt}
-    payload = prepare_body(payload, req.keep_alive)
+    payload = inject_ttl_if_missing(payload, req.keep_alive)
 
-    r = await post_openai_json(client, model_cache, "/embeddings", payload)
+    r = await backend_api.post_openai_json(client, model_cache, "/embeddings", payload)
     data = r["data"][0]["embedding"]
     return {"embedding": data}
 
@@ -456,7 +452,7 @@ async def ps(
     model_cache=Depends(get_model_cache),
 ) -> Dict[str, Any]:
     """Return best-effort process status (loaded models)."""
-    models = await lm_models(client, model_cache=model_cache)
+    models = await backend_api.models(client, model_cache)
     loaded = []
     for entry in models:
         if _entry_is_loaded(entry):
@@ -502,7 +498,7 @@ async def delete(
     """Best-effort delete/unload (maps to a short TTL request)."""
     name = req.name or req.model or req.id or ""
     if name:
-        model = await model_selector.ensure_selected(client, model_cache, name)
+        model = await backend_api.ensure_selected(client, model_cache, name)
         payload = {
             "model": model,
             "prompt": "",
@@ -511,7 +507,7 @@ async def delete(
             "ttl": settings.unload_ttl_seconds,
         }
         try:
-            await post_openai_json(client, model_cache, "/completions", payload)
+            await backend_api.post_openai_json(client, model_cache, "/completions", payload)
         except Exception:  # pylint: disable=broad-exception-caught
             pass
 

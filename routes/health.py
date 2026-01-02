@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
@@ -15,6 +16,9 @@ from utils.time import now
 
 router = APIRouter()
 
+if TYPE_CHECKING:
+    pass
+
 try:
     from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
@@ -22,6 +26,7 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     PROMETHEUS_AVAILABLE = False
     CONTENT_TYPE_LATEST = "text/plain"
+    generate_latest = None
 
 
 async def _preflight(client) -> None:
@@ -84,7 +89,7 @@ async def healthz(client=Depends(get_client)) -> JSONResponse:
 @router.get("/metrics")
 async def metrics(client=Depends(get_client)) -> Response:
     """Return Prometheus metrics when available."""
-    if PROMETHEUS_AVAILABLE:
+    if PROMETHEUS_AVAILABLE and generate_latest is not None:
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     up = 0

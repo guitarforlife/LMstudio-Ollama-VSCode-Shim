@@ -1,4 +1,4 @@
-"""Version endpoints."""
+"""API Version endpoints."""
 
 from __future__ import annotations
 

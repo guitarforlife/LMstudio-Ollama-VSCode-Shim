@@ -14,6 +14,8 @@ from state import settings
 
 logger = logging.getLogger("lmstudio_shim")
 
+AUTH_BEARER_PREFIX = "bearer "
+
 if TYPE_CHECKING:
     from prometheus_client import Counter as CounterType
     from prometheus_client import Histogram as HistogramType
@@ -96,8 +98,8 @@ async def api_key_middleware(
             {"error": "unauthorized", "detail": "missing Authorization header"},
             401,
         )
-    if auth.lower().startswith("bearer "):
-        token = auth[7:].strip()
+    if auth.lower().startswith(AUTH_BEARER_PREFIX):
+        token = auth[len(AUTH_BEARER_PREFIX):].strip()
     else:
         token = auth.strip()
     if token != settings.api_key:
@@ -108,7 +110,11 @@ async def api_key_middleware(
 async def request_size_limit_middleware(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
-    """Reject requests that exceed the configured max size."""
+    """Reject requests that exceed the configured max size.
+
+    Note: For chunked requests without a Content-Length header, we read the body
+    to enforce the limit.
+    """
     if settings.max_request_bytes:
         size_header = request.headers.get("Content-Length")
         if size_header:
@@ -120,6 +126,16 @@ async def request_size_limit_middleware(
                     400,
                 )
             if size > settings.max_request_bytes:
+                return JSONResponse(
+                    {
+                        "error": "payload_too_large",
+                        "detail": f"payload exceeds {settings.max_request_bytes} bytes",
+                    },
+                    413,
+                )
+        else:
+            body = await request.body()
+            if len(body) > settings.max_request_bytes:
                 return JSONResponse(
                     {
                         "error": "payload_too_large",

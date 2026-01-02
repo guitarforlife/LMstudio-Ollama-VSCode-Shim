@@ -10,18 +10,11 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend import (
-    BackendClient,
-    _extract_model_id,
-    _stream_post_raw,
-    model_selector,
-    openai_stream_error,
-    post_openai_json,
-    preflight_lmstudio,
-)
+from backend import BackendClient, _extract_model_id, openai_stream_error
+from backend_api import api as backend_api
 from deps import get_client, get_model_cache
 from state import STREAM_CONTENT_TYPE, logger, settings
-from utils.http import prepare_body
+from utils.http import inject_ttl_if_missing
 
 router = APIRouter()
 
@@ -44,8 +37,7 @@ async def openai_models(
     model_cache=Depends(get_model_cache),
 ) -> Dict[str, Any]:
     """Return OpenAI-compatible model list."""
-    backend_client = BackendClient(client, model_cache)
-    models = await backend_client.models()
+    models = await backend_api.models(client, model_cache)
     created = int(time.time())
     data = []
     seen = set()
@@ -79,21 +71,27 @@ async def openai_chat(
     )
     body = req.model_dump(exclude_none=True)
 
-    body["model"] = await model_selector.ensure_selected(client, model_cache, req.model)
-    body = prepare_body(body, req.keep_alive)
+    body["model"] = await backend_api.ensure_selected(client, model_cache, req.model)
+    body = inject_ttl_if_missing(body, req.keep_alive)
     body.pop("keep_alive", None)
 
     if not body.get("stream", False):
-        return JSONResponse(await post_openai_json(client, model_cache, "/chat/completions", body))
+        result = await backend_api.post_openai_json(
+            client,
+            model_cache,
+            "/chat/completions",
+            body,
+        )
+        return JSONResponse(result)
 
-    await preflight_lmstudio(client)
+    await backend_api.preflight(client)
     backend_client = BackendClient(client, model_cache)
 
     def on_error(message: str) -> Iterable[bytes]:
         return [openai_stream_error(message), b"data: [DONE]\n\n"]
 
     return StreamingResponse(
-        _stream_post_raw(
+        backend_api.stream_post_raw(
             client,
             backend_client.openai_url("/chat/completions"),
             body,
@@ -128,22 +126,22 @@ async def openai_completions(
     if "stop" not in body and settings.default_stop is not None:
         body["stop"] = settings.default_stop
 
-    body["model"] = await model_selector.ensure_selected(client, model_cache, req.model)
-    body = prepare_body(body, req.keep_alive)
+    body["model"] = await backend_api.ensure_selected(client, model_cache, req.model)
+    body = inject_ttl_if_missing(body, req.keep_alive)
     body.pop("keep_alive", None)
 
     if not body.get("stream", False):
-        result = await post_openai_json(client, model_cache, "/completions", body)
+        result = await backend_api.post_openai_json(client, model_cache, "/completions", body)
         return JSONResponse(result)
 
-    await preflight_lmstudio(client)
+    await backend_api.preflight(client)
     backend_client = BackendClient(client, model_cache)
 
     def on_error(message: str) -> Iterable[bytes]:
         return [openai_stream_error(message), b"data: [DONE]\n\n"]
 
     return StreamingResponse(
-        _stream_post_raw(
+        backend_api.stream_post_raw(
             client,
             backend_client.openai_url("/completions"),
             body,

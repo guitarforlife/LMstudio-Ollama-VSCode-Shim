@@ -47,10 +47,10 @@ def test_ttl_processor_parsing_and_copy() -> None:
     assert "ttl" not in payload
 
 
-def test_prepare_body_injects_ttl() -> None:
-    """Ensure prepare_body injects TTL without mutating input."""
+def test_inject_ttl_if_missing() -> None:
+    """Ensure inject_ttl_if_missing injects TTL without mutating input."""
     payload = {"model": "foo"}
-    updated = helpers.prepare_body(payload, keep_alive="2m", settings=DummySettings())
+    updated = helpers.inject_ttl_if_missing(payload, keep_alive="2m", settings=DummySettings())
     assert updated["ttl"] == 120
     assert "ttl" not in payload
 

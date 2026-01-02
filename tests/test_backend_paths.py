@@ -10,8 +10,8 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 import backend
+import backend_api
 import main
-import routes.openai as openai_routes
 from client import BackendError
 
 
@@ -92,8 +92,8 @@ async def test_openai_chat_ttl_inject_keep_alive(monkeypatch: pytest.MonkeyPatch
         captured["payload"] = payload
         return {"choices": [{"message": {"content": "ok"}}]}
 
-    monkeypatch.setattr(main.model_selector, "ensure_selected", fake_select)
-    monkeypatch.setattr(openai_routes, "post_openai_json", fake_post)
+    monkeypatch.setattr(backend_api.api, "ensure_selected", fake_select)
+    monkeypatch.setattr(backend_api.api, "post_openai_json", fake_post)
 
     async with main.lifespan(main.app):
         transport = ASGITransport(app=cast(Any, main.app))
@@ -122,8 +122,8 @@ async def test_openai_chat_ttl_preserves_explicit(monkeypatch: pytest.MonkeyPatc
         captured["payload"] = payload
         return {"choices": [{"message": {"content": "ok"}}]}
 
-    monkeypatch.setattr(main.model_selector, "ensure_selected", fake_select)
-    monkeypatch.setattr(openai_routes, "post_openai_json", fake_post)
+    monkeypatch.setattr(backend_api.api, "ensure_selected", fake_select)
+    monkeypatch.setattr(backend_api.api, "post_openai_json", fake_post)
 
     async with main.lifespan(main.app):
         transport = ASGITransport(app=cast(Any, main.app))
@@ -144,7 +144,7 @@ async def test_openai_models_backend_unavailable(monkeypatch: pytest.MonkeyPatch
     async def fake_models(_client, model_cache=None):  # type: ignore[override]
         raise BackendError(status_code=502, error="backend_error", detail="backend down")
 
-    monkeypatch.setattr(backend, "lm_models", fake_models)
+    monkeypatch.setattr(backend_api.api, "models", fake_models)
 
     async with main.lifespan(main.app):
         transport = ASGITransport(app=cast(Any, main.app))
