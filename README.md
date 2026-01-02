@@ -2,7 +2,7 @@
 
 FastAPI server that exposes an Ollama-compatible API proxying requests to a
 running LM Studio instance, such that the Ollama Language Model extension can be
-used in Visual Studio Code with Co-Pilot.
+used in Visual Studio Code and Co-Pilot, with LM Studio (server) hosted models.
 
 ## Why?
 
