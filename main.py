@@ -36,9 +36,6 @@ import state
 from logging_config import logger
 from state import LMSTUDIO_OPENAI_BASE, LMSTUDIO_REST_BASE, OLLAMA_VERSION, SHIM_VERSION
 
-settings = state.settings
-
-
 async def lm_models(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     """Backward-compatible model list helper for tests."""
     return await backend.lm_models(client, model_cache=None)
@@ -222,7 +219,7 @@ def run_server() -> None:
     run()
 
 
-__all__ = ["app", "settings", "get_client"]
+__all__ = ["app", "get_client"]
 
 # Re-exported for tests and external tooling.
 ModelSelector = backend.ModelSelector
