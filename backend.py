@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import json
 import time
 from typing import Any, AsyncGenerator, Callable, Dict, Iterable, List, Optional, Tuple
@@ -90,7 +91,7 @@ def _entry_is_loaded(entry: Dict[str, Any]) -> bool:
     for key in ("loaded", "is_loaded", "active"):
         if entry.get(key) is True:
             return True
-    state = str(entry.get("state") or entry.get("status") or "").lower()
+    state = (entry.get("state") or entry.get("status") or "").lower()
     return state in {"loaded", "active", "ready", "running"}
 
 
@@ -115,8 +116,23 @@ class ModelSelector:  # pylint: disable=too-few-public-methods
                 model_id = cached
                 entry = None
             else:
-                model_id, entry = await _resolve_model_id(client, model_cache, requested)
-                self._cache[requested] = model_id
+                model_id = None
+                entry = None
+
+        if model_id is None:
+            resolved_id, entry = await _resolve_model_id(client, model_cache, requested)
+        else:
+            resolved_id = model_id
+
+        async with self._lock:
+            cached = self._cache.get(requested)
+            if cached is None:
+                self._cache[requested] = resolved_id
+                model_id = resolved_id
+            else:
+                model_id = cached
+                entry = None
+
             if self._active_model != model_id:
                 logger.info(
                     "Model selection %s -> %s",
@@ -153,6 +169,60 @@ def openai_stream_error(message: str) -> bytes:
     return f"data: {json.dumps(payload)}\n\n".encode()
 
 
+async def _iter_response_bytes(response: httpx.Response) -> AsyncGenerator[bytes, None]:
+    """Yield response bytes with optional chunking."""
+    chunk_size = int(getattr(settings, "stream_chunk_size", 0) or 0)
+    iterator = response.aiter_bytes(chunk_size) if chunk_size > 0 else response.aiter_bytes()
+    try:
+        async for chunk in iterator:
+            if chunk:
+                yield chunk
+    except httpx.StreamConsumed:
+        if response.content:
+            yield response.content
+
+
+async def _handle_stream_httpx_error(
+    exc: httpx.HTTPError,
+    url: str,
+    on_error: Callable[[str], Iterable[bytes]],
+    request_id: str,
+) -> AsyncGenerator[bytes, None]:
+    """Emit error chunks for HTTPX streaming errors."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        logger.error(
+            "LMStudio error",
+            extra={
+                "url": str(exc.request.url) if exc.request else url,
+                "status": exc.response.status_code,
+                "body": exc.response.text,
+                "request_id_ctx": request_id,
+            },
+        )
+        message = exc.response.text or "LMStudio error"
+    elif isinstance(exc, httpx.RequestError):
+        message = (
+            "LMStudio request timed out"
+            if isinstance(exc, httpx.ReadTimeout)
+            else "LMStudio backend unavailable"
+        )
+        logger.error(
+            "LMStudio request failed",
+            extra={"url": url, "request_id_ctx": request_id},
+            exc_info=True,
+        )
+    else:
+        logger.error(
+            "LMStudio HTTP error",
+            extra={"url": url, "request_id_ctx": request_id},
+            exc_info=True,
+        )
+        message = "LMStudio HTTP error"
+
+    for chunk in on_error(message):
+        yield chunk
+
+
 async def _stream_post_raw(
     client: BackendLike,
     url: str,
@@ -167,13 +237,8 @@ async def _stream_post_raw(
     try:
         async with client.stream("POST", url, json=payload) as response:
             response.raise_for_status()
-            try:
-                async for chunk in response.aiter_raw():
-                    if chunk:
-                        yield chunk
-            except httpx.StreamConsumed:
-                if response.content:
-                    yield response.content
+            async for chunk in _iter_response_bytes(response):
+                yield chunk
     except asyncio.CancelledError:
         logger.info(
             "%s stream cancelled",
@@ -181,71 +246,63 @@ async def _stream_post_raw(
             extra={"url": url, "request_id_ctx": request_id},
         )
         return
-    except httpx.HTTPStatusError as exc:
-        logger.error(
-            "LMStudio error",
-            extra={
-                "url": str(exc.request.url) if exc.request else url,
-                "status": exc.response.status_code,
-                "body": exc.response.text,
-                "request_id_ctx": request_id,
-            },
-        )
-        for chunk in on_error(exc.response.text or "LMStudio error"):
-            yield chunk
-    except httpx.RequestError as exc:
-        if isinstance(exc, httpx.ReadTimeout):
-            message = "LMStudio request timed out"
-        else:
-            message = "LMStudio backend unavailable"
-        logger.error(
-            "LMStudio request failed",
-            extra={"url": url, "request_id_ctx": request_id},
-            exc_info=True,
-        )
-        for chunk in on_error(message):
-            yield chunk
-    except httpx.HTTPError:
-        logger.error(
-            "LMStudio HTTP error",
-            extra={"url": url, "request_id_ctx": request_id},
-            exc_info=True,
-        )
-        for chunk in on_error("LMStudio HTTP error"):
+    except httpx.HTTPError as exc:
+        async for chunk in _handle_stream_httpx_error(
+            exc,
+            url,
+            on_error,
+            request_id,
+        ):
             yield chunk
 
 
 async def preflight_lmstudio(client: BackendLike) -> None:
     """Check LM Studio is reachable before streaming."""
-    for url in (f"{LMSTUDIO_REST_BASE}/models", f"{LMSTUDIO_OPENAI_BASE}/models"):
-        try:
-            response = await client.get(url, timeout=5.0)
-            if response.status_code == 404:
+    urls = (f"{LMSTUDIO_REST_BASE}/models", f"{LMSTUDIO_OPENAI_BASE}/models")
+    tasks = [client.get(url, timeout=5.0) for url in urls]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    request_error: Optional[BaseException] = None
+    status_error: Optional[httpx.HTTPStatusError] = None
+
+    for url, result in zip(urls, results):
+        if isinstance(result, httpx.Response):
+            if result.status_code == 404:
                 continue
-            response.raise_for_status()
-            return
-        except httpx.RequestError as exc:
-            logger.error(
-                "LMStudio connection error",
-                extra={"url": url, "request_id_ctx": request_id_ctx.get("-")},
-                exc_info=True,
-            )
-            raise BackendUnavailableError("LMStudio backend unavailable") from exc
-        except httpx.HTTPStatusError as exc:
-            logger.error(
-                "LMStudio preflight error",
-                extra={
-                    "url": str(exc.request.url) if exc.request else url,
-                    "status": exc.response.status_code,
-                    "body": exc.response.text,
-                    "request_id_ctx": request_id_ctx.get("-"),
-                },
-            )
-            raise BackendError(
-                status_code=exc.response.status_code,
-                error="backend_error",
-                detail=exc.response.text or "LMStudio error",
-            ) from exc
+            try:
+                result.raise_for_status()
+                return
+            except httpx.HTTPStatusError as exc:
+                status_error = exc
+        elif isinstance(result, httpx.RequestError):
+            request_error = result
+        elif isinstance(result, Exception):
+            request_error = result
+
+    if request_error is not None:
+        logger.error(
+            "LMStudio connection error",
+            extra={"request_id_ctx": request_id_ctx.get("-")},
+            exc_info=True,
+        )
+        raise BackendUnavailableError("LMStudio backend unavailable") from request_error
+
+    if status_error is not None:
+        logger.error(
+            "LMStudio preflight error",
+            extra={
+                "url": str(status_error.request.url) if status_error.request else "",
+                "status": status_error.response.status_code,
+                "body": status_error.response.text,
+                "request_id_ctx": request_id_ctx.get("-"),
+            },
+        )
+        raise BackendError(
+            status_code=status_error.response.status_code,
+            error="backend_error",
+            detail=status_error.response.text or "LMStudio error",
+        ) from status_error
+
     raise BackendUnavailableError("LMStudio backend unavailable")
 
 
@@ -274,7 +331,7 @@ async def lm_models(
                 model_cache.set(models)
             return models
     except BackendError as exc:
-        if exc.status_code != 404:
+        if exc.status_code != 404 and logger.isEnabledFor(logging.DEBUG):
             logger.debug("REST models failed: %s", exc.detail)
 
     payload = await request_json(

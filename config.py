@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     unload_ttl_seconds: int = 0
     host: str = "0.0.0.0"
     port: int = 11434
+    workers: Optional[int] = None
 
     max_connections: int = 50
     max_keepalive_connections: int = 20
@@ -76,6 +77,7 @@ class Settings(BaseSettings):
     verify_ssl: bool = True
     max_request_bytes: Optional[int] = None
     model_cache_ttl_seconds: float = 30.0
+    stream_chunk_size: int = 8192
     default_temperature: float = DEFAULT_TEMPERATURE
     default_system_prompt: Optional[str] = None
     default_stop: Optional[str] = None
