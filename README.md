@@ -34,7 +34,7 @@ Environment variables:
 - `SHIM_OLLAMA_VERSION`: Reported Ollama version header (default: `0.13.5`).
 - `SHIM_API_KEY`: If set, require `Authorization: Bearer <key>` for non-health endpoints.
 - `SHIM_DEFAULT_TTL_SECONDS`: Default TTL injected when keep_alive is not provided (default: `0`).
-- `SHIM_UNLOAD_TTL_SECONDS`: TTL to use when keep_alive requests immediate unload (default: `1`).
+- `SHIM_UNLOAD_TTL_SECONDS`: TTL to use when keep_alive requests immediate unload (default: `0`, disabled).
 - `SHIM_MAX_CONNECTIONS`: Max total backend connections (default: `50`).
 - `SHIM_MAX_KEEPALIVE_CONNECTIONS`: Max keepalive connections (default: `20`).
 - `SHIM_REQUEST_RETRIES`: Retry count for transient backend failures (default: `1`).

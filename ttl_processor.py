@@ -34,10 +34,11 @@ class TTLProcessor:
         # pylint: disable=too-many-return-statements,too-many-branches
         if keep_alive is None:
             return None
+        unload_ttl = int(getattr(self._settings, "unload_ttl_seconds") or 0)
 
         if isinstance(keep_alive, (int, float)):
             if keep_alive <= 0:
-                return int(getattr(self._settings, "unload_ttl_seconds"))
+                return unload_ttl if unload_ttl > 0 else None
             return int(keep_alive)
 
         if isinstance(keep_alive, str):
@@ -47,7 +48,7 @@ class TTLProcessor:
             if s in {"-1", "infinite", "forever"}:
                 return None
             if s in {"0", "0s", "0m", "0h"}:
-                return int(getattr(self._settings, "unload_ttl_seconds"))
+                return unload_ttl if unload_ttl > 0 else None
 
             m = _DURATION_RE.match(s)
             if not m:
@@ -56,7 +57,7 @@ class TTLProcessor:
             num = float(m.group("num"))
             unit = (m.group("unit") or "s").lower()
             if num <= 0:
-                return int(getattr(self._settings, "unload_ttl_seconds"))
+                return unload_ttl if unload_ttl > 0 else None
 
             if unit == "ms":
                 return max(1, int(num / 1000.0))

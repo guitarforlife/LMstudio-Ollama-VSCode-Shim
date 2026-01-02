@@ -507,15 +507,16 @@ async def delete(
     model_cache=Depends(get_model_cache),
 ) -> JSONResponse:
     """Best-effort delete/unload (maps to a short TTL request)."""
+    unload_ttl = int(settings.unload_ttl_seconds or 0)
     name = req.name or req.model or req.id or ""
-    if name:
+    if name and unload_ttl > 0:
         model = await backend_api.ensure_selected(client, model_cache, name)
         payload = {
             "model": model,
             "prompt": "",
             "max_tokens": 0,
             "stream": False,
-            "ttl": settings.unload_ttl_seconds,
+            "ttl": unload_ttl,
         }
         try:
             await backend_api.post_openai_json(client, model_cache, "/completions", payload)
