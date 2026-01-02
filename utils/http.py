@@ -19,14 +19,24 @@ def _get_ttl_processor(settings: Optional[Any] = None) -> TTLProcessor:
     return _CACHE["processor"]
 
 
-def prepare_body(
+def inject_ttl_if_missing(
     body: Dict[str, Any],
     keep_alive: Optional[Any],
     settings: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Prepare request body with TTL injection."""
     if keep_alive is None and "ttl" in body:
+        # Respect an explicit ttl provided by the client payload.
         return dict(body)
 
     ttl_processor = _get_ttl_processor(settings)
     return ttl_processor.inject_ttl(body, keep_alive=keep_alive)
+
+
+def prepare_body(
+    body: Dict[str, Any],
+    keep_alive: Optional[Any],
+    settings: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Backward-compatible wrapper for TTL injection."""
+    return inject_ttl_if_missing(body, keep_alive, settings=settings)

@@ -3,6 +3,7 @@
 # pylint: disable=duplicate-code,protected-access
 
 import json
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -55,16 +56,15 @@ async def test_openai_chat_stream(monkeypatch: pytest.MonkeyPatch) -> None:
 
     backend_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
-    async def override_get_client() -> httpx.AsyncClient:
+    def client_factory() -> httpx.AsyncClient:
         return backend_client
 
     monkeypatch.setattr(backend, "LMSTUDIO_REST_BASE", "http://test/api/v0")
     monkeypatch.setattr(backend, "LMSTUDIO_OPENAI_BASE", "http://test/v1")
-    main.app.dependency_overrides[main.get_client] = override_get_client
 
     try:
-        async with main.lifespan(main.app):
-            transport = ASGITransport(app=main.app)
+        async with main.lifespan(main.app, client_factory=client_factory):
+            transport = ASGITransport(app=cast(Any, main.app))
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.post(
                     "/v1/chat/completions",
@@ -72,7 +72,6 @@ async def test_openai_chat_stream(monkeypatch: pytest.MonkeyPatch) -> None:
                 )
                 body = await resp.aread()
     finally:
-        main.app.dependency_overrides = {}
         await backend_client.aclose()
 
     assert resp.status_code == 200
@@ -97,7 +96,7 @@ async def test_openai_chat_ttl_inject_keep_alive(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(openai_routes, "post_openai_json", fake_post)
 
     async with main.lifespan(main.app):
-        transport = ASGITransport(app=main.app)
+        transport = ASGITransport(app=cast(Any, main.app))
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post(
                 "/v1/chat/completions",
@@ -127,7 +126,7 @@ async def test_openai_chat_ttl_preserves_explicit(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(openai_routes, "post_openai_json", fake_post)
 
     async with main.lifespan(main.app):
-        transport = ASGITransport(app=main.app)
+        transport = ASGITransport(app=cast(Any, main.app))
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post(
                 "/v1/chat/completions",
@@ -148,7 +147,7 @@ async def test_openai_models_backend_unavailable(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(backend, "lm_models", fake_models)
 
     async with main.lifespan(main.app):
-        transport = ASGITransport(app=main.app)
+        transport = ASGITransport(app=cast(Any, main.app))
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.get("/v1/models")
 

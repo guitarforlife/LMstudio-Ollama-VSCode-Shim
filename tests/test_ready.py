@@ -1,5 +1,7 @@
 """Readiness endpoint tests."""
 
+from typing import Any, cast
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -15,7 +17,7 @@ async def test_ready(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(health_routes, "preflight_lmstudio", fake_preflight)
     async with lifespan(app):
-        transport = ASGITransport(app=app)
+        transport = ASGITransport(app=cast(Any, app))
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.get("/ready")
         assert resp.status_code == 200

@@ -1,11 +1,14 @@
-"""shim - Ollama to LM Studio bridge."""
+"""shim - Ollama to LM Studio bridge.
+
+Primary implementation lives here; `shim/main.py` re-exports for module usage.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Awaitable, Callable, Dict
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, NoReturn, Optional, Tuple
 
 import httpx
 import uvicorn
@@ -24,6 +27,7 @@ from middleware import (
     request_size_limit_middleware,
 )
 from routes import health_router, ollama_router, openai_router, version_router
+from logging_config import request_id_ctx
 from state import (
     LMSTUDIO_OPENAI_BASE,
     LMSTUDIO_REST_BASE,
@@ -41,12 +45,18 @@ async def lm_models(client: httpx.AsyncClient):
     return await backend.lm_models(client, model_cache=None)
 
 
-async def _resolve_model_id(client: httpx.AsyncClient, requested: str):
+async def _resolve_model_id(
+    client: httpx.AsyncClient,
+    requested: str,
+) -> Tuple[str, Optional[Dict[str, Any]]]:
     """Backward-compatible model resolution helper for tests."""
     return await backend.resolve_model_id(client, None, requested)
 
 
-async def _model_exists_and_state(client: httpx.AsyncClient, model: str):
+async def _model_exists_and_state(
+    client: httpx.AsyncClient,
+    model: str,
+) -> Tuple[bool, Optional[str]]:
     """Backward-compatible model lookup helper for tests."""
     return await backend.model_exists_and_state(client, None, model)
 
@@ -66,11 +76,19 @@ async def _retry_request(
     raise BackendUnavailableError("LMStudio backend unavailable")
 
 
-async def _proxy_get(client: httpx.AsyncClient, url: str, retries: int = 0) -> Dict[str, Any]:
+def _handle_backend_error(exc: Exception) -> NoReturn:
+    raise HTTPException(status_code=502, detail="LMStudio backend unavailable") from exc
+
+
+async def _proxy_get(
+    client: httpx.AsyncClient,
+    url: str,
+    retries: int = 0,
+) -> Dict[str, Any]:
     try:
         response = await _retry_request(client.get, url, retries=retries)
     except BackendUnavailableError as exc:
-        raise HTTPException(status_code=502, detail="LMStudio backend unavailable") from exc
+        _handle_backend_error(exc)
 
     if response.is_error:
         raise HTTPException(
@@ -89,7 +107,7 @@ async def _proxy_post_json(
     try:
         response = await _retry_request(lambda: client.post(url, json=payload), retries=retries)
     except BackendUnavailableError as exc:
-        raise HTTPException(status_code=502, detail="LMStudio backend unavailable") from exc
+        _handle_backend_error(exc)
 
     if response.is_error:
         model = ""
@@ -117,20 +135,24 @@ async def _proxy_post_json(
         raise HTTPException(status_code=502, detail="LMStudio returned invalid JSON") from exc
 
 
-def _coerce_client_factory(value: Any) -> Callable[[], httpx.AsyncClient]:
-    """Return a validated client factory or the default implementation.
+def _coerce_client_factory(factory: Any) -> Callable[[], httpx.AsyncClient]:
+    """Validate or wrap a client factory.
 
-    Custom factories must return an ``httpx.AsyncClient`` instance.
+    The argument may be a callable returning an ``httpx.AsyncClient`` or ``None``.
     """
-    if not callable(value):
+    if not callable(factory):
         def default_factory() -> httpx.AsyncClient:
             return default_client_factory(settings)
 
         return default_factory
 
     def wrapped_factory() -> httpx.AsyncClient:
-        client = value()
+        client = factory()
         if not isinstance(client, httpx.AsyncClient):
+            logger.error(
+                "client_factory returned unexpected type",
+                extra={"request_id": request_id_ctx.get("-")},
+            )
             raise TypeError("client_factory must return httpx.AsyncClient")
         return client
 
@@ -138,10 +160,13 @@ def _coerce_client_factory(value: Any) -> Callable[[], httpx.AsyncClient]:
 
 
 @asynccontextmanager
-async def lifespan(fastapi_app: FastAPI) -> AsyncGenerator[None, None]:
+async def lifespan(
+    fastapi_app: FastAPI,
+    client_factory: Optional[Callable[[], httpx.AsyncClient]] = None,
+) -> AsyncGenerator[None, None]:
     """Manage startup and shutdown lifecycle for the FastAPI app."""
     client_factory_attr = getattr(fastapi_app.state, "client_factory", None)
-    client_factory = _coerce_client_factory(client_factory_attr)
+    client_factory = _coerce_client_factory(client_factory or client_factory_attr)
     try:
         client = client_factory()
     except Exception as exc:  # pylint: disable=broad-exception-caught
