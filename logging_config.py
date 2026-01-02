@@ -1,9 +1,28 @@
 """Logging configuration helpers for the shim."""
 
+import asyncio
 import logging
 from contextvars import ContextVar
 
 request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
+logger = logging.getLogger("lmstudio_shim")
+
+
+class SuppressShutdownErrors(logging.Filter):  # pylint: disable=too-few-public-methods
+    """Filter out noisy shutdown errors from Uvicorn/Starlette."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if "timeout graceful shutdown exceeded" in message:
+            return False
+        if "Exception in ASGI application" in message:
+            return False
+        if "CancelledError" in message:
+            return False
+        exc = record.exc_info[1] if record.exc_info else None
+        if isinstance(exc, asyncio.CancelledError):
+            return False
+        return True
 
 
 def setup_logging(debug: bool) -> None:
@@ -22,3 +41,5 @@ def setup_logging(debug: bool) -> None:
     )
     if debug:
         logging.getLogger().setLevel(logging.DEBUG)
+    shutdown_filter = SuppressShutdownErrors()
+    logging.getLogger("uvicorn.error").addFilter(shutdown_filter)

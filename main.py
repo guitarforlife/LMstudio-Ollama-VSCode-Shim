@@ -1,1506 +1,235 @@
-"""LMStudio-Ollama VSCode Shim.
+"""FastAPI entry point for the LMStudio-Ollama shim.
 
-FastAPI server that exposes an Ollama-compatible API and proxies requests to a
-running LM Studio instance on Mac.
-
-Model load/unload:
-- LM Studio does NOT expose stable HTTP endpoints like /v1/models/load
-  or /v1/models/unload.
-- Model loading/unloading is driven by:
-  1) JIT (Just-In-Time) model loading (LM Studio Server Settings)
-  2) Auto-Evict / Only-Keep-Last-JIT-Loaded (LM Studio Server Settings)
-  3) Idle TTL, controllable via a ``ttl`` field in request payloads
-- Ollama clients request load/unload via ``keep_alive``.
-  We translate ``keep_alive`` -> ``ttl`` and pass it through to LM Studio.
+This is the canonical app implementation. `shim/main.py` is a thin wrapper that
+re-exports the same symbols for module-based execution and backward
+compatibility.
 """
 
-# pylint: disable=too-many-lines
+from __future__ import annotations
 
 import asyncio
-import json
-import logging
-import re
-import time
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar
-from uuid import uuid4
+from typing import Any, AsyncGenerator, Callable, Optional, cast
 
 import httpx
 import uvicorn
-from fastapi import Depends, FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from fastapi.responses import JSONResponse
 
-from constants import DEFAULT_LMSTUDIO_BASE, DEFAULT_OLLAMA_VERSION
-from logging_config import request_id_ctx, setup_logging
-from ttl_processor import TTLProcessor
-
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv()
-except Exception:  # pylint: disable=broad-exception-caught
-    pass
-
-T = TypeVar("T")
-
-
-class BackendUnavailableError(RuntimeError):
-    """Raised when backend retries are exhausted."""
-
-
-# ------------------------------------------------
-# Configuration via environment variables (centralised settings)
-# ------------------------------------------------
-def _derive_rest_base(openai_base: str) -> str:
-    """Derive REST base from OpenAI base.
-
-    Typical: http://localhost:1234/v1  -> http://localhost:1234/api/v0
-
-    Args:
-        openai_base: OpenAI-compatible base URL.
-
-    Returns:
-        REST API base URL.
-    """
-    base = openai_base.rstrip("/")
-    if base.endswith("/v1"):
-        return base[: -len("/v1")] + "/api/v0"
-    if re.search(r"/v\d+$", base):
-        return re.sub(r"/v\d+$", "/api/v0", base)
-    return base + "/api/v0"
-
-
-def _validate_base_url(value: str, name: str) -> str:
-    """Validate a base URL for LM Studio configuration.
-
-    Args:
-        value: URL to validate.
-        name: Environment variable name for error messages.
-
-    Returns:
-        The original URL if valid.
-    """
-    try:
-        url = httpx.URL(value)
-    except Exception as exc:
-        raise ValueError(f"{name} is not a valid URL: {value}") from exc
-    if not url.scheme or not url.host:
-        raise ValueError(f"{name} must include scheme and host: {value}")
-    return value
-
-
-class Settings(BaseSettings):
-    """Application configuration loaded from environment variables.
-
-    All environment variables are expected to be prefixed with ``SHIM_``.
-    For example, ``SHIM_LMSTUDIO_BASE`` overrides the default LMStudio base URL.
-    """
-
-    # Use a prefix so that unrelated env vars do not interfere with the shim.
-    model_config = SettingsConfigDict(extra="ignore", env_prefix="SHIM_")
-    lmstudio_base: str = DEFAULT_LMSTUDIO_BASE
-    lmstudio_rest_base: Optional[str] = None
-
-    ollama_version: str = DEFAULT_OLLAMA_VERSION
-    http_timeout: Optional[float] = 300.0
-    debug: bool = False
-    allowed_origins: List[str] = Field(default_factory=list)
-    api_key: Optional[str] = None
-
-    # Default TTL applied to all proxied requests if the client doesn't specify keep_alive/ttl.
-    # Set to 0 or empty to disable injection (use LM Studio defaults).
-    default_ttl_seconds: Optional[int] = 0
-
-    # If a client asks to "unload immediately" (keep_alive=0), we can't force an immediate unload
-    # via REST; we approximate by setting ttl to this many seconds for that request.
-    unload_ttl_seconds: int = 1
-    host: str = "0.0.0.0"
-    port: int = 11434
-
-    @field_validator("allowed_origins", mode="before")
-    @classmethod
-    def _parse_origins(cls, value: Any) -> List[str]:
-        if value is None or value == "":
-            return []
-        if isinstance(value, list):
-            return [origin.strip() for origin in value if str(origin).strip()]
-        if isinstance(value, str):
-            return [origin.strip() for origin in value.split(",") if origin.strip()]
-        raise ValueError("ALLOWED_ORIGINS must be a comma-separated string")
-
-    @field_validator("http_timeout", mode="before")
-    @classmethod
-    def _validate_timeout(cls, value: Any) -> Optional[float]:
-        if value is None or value == "":
-            return 300.0
-        try:
-            parsed = float(value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("HTTP_TIMEOUT must be a number") from exc
-        if parsed == 0:
-            return None
-        if parsed < 0.1:
-            raise ValueError("HTTP_TIMEOUT must be >= 0.1 or 0 for no limit")
-        return parsed
-
-    @field_validator("debug", mode="before")
-    @classmethod
-    def _parse_debug(cls, value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        if value is None:
-            return False
-        if isinstance(value, (int, float)):
-            return bool(value)
-        if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-        return False
-
-    @field_validator("default_ttl_seconds", mode="before")
-    @classmethod
-    def _validate_default_ttl(cls, value: Any) -> Optional[int]:
-        if value is None or value == "":
-            return 0
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("DEFAULT_TTL_SECONDS must be an integer") from exc
-        if parsed < 0:
-            # negative means "do not inject"
-            return 0
-        return parsed
-
-    @field_validator("lmstudio_base", mode="before")
-    @classmethod
-    def _validate_lmstudio_base(cls, value: Any) -> str:
-        if value is None or value == "":
-            return DEFAULT_LMSTUDIO_BASE
-        if not isinstance(value, str):
-            raise ValueError("LMSTUDIO_BASE must be a string URL")
-        return value
-
-    @field_validator("lmstudio_rest_base", mode="before")
-    @classmethod
-    def _normalize_lmstudio_rest_base(cls, value: Any) -> Optional[str]:
-        if value is None or value == "":
-            return None
-        if not isinstance(value, str):
-            raise ValueError("LMSTUDIO_REST_BASE must be a string URL")
-        return value
-
-    @field_validator("host", mode="before")
-    @classmethod
-    def _normalize_host(cls, value: Any) -> str:
-        if value is None or value == "":
-            return "0.0.0.0"
-        if not isinstance(value, str):
-            raise ValueError("HOST must be a string")
-        return value
-
-    @field_validator("port", mode="before")
-    @classmethod
-    def _normalize_port(cls, value: Any) -> int:
-        if value is None or value == "":
-            return 11434
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("PORT must be an integer") from exc
-        if parsed <= 0:
-            raise ValueError("PORT must be > 0")
-        return parsed
-
-    @model_validator(mode="after")
-    def _finalize_bases(self) -> "Settings":
-        rest_base = self.lmstudio_rest_base or _derive_rest_base(self.lmstudio_base)
-        object.__setattr__(self, "lmstudio_rest_base", rest_base)
-        _validate_base_url(self.lmstudio_base, "SHIM_LMSTUDIO_BASE")
-        _validate_base_url(rest_base, "SHIM_LMSTUDIO_REST_BASE")
-        return self
-
-
-try:
-    settings = Settings()
-except ValueError as exc:
-    logging.basicConfig(level=logging.ERROR, format="%(levelname)s %(name)s: %(message)s")
-    logging.getLogger("lmstudio_shim").error("Invalid configuration: %s", exc)
-    raise
-
-setup_logging(settings.debug)
-logger = logging.getLogger("lmstudio_shim")
-
-LMSTUDIO_OPENAI_BASE = settings.lmstudio_base.rstrip("/")
-OLLAMA_VERSION = settings.ollama_version
-ttl_processor = TTLProcessor(settings)
-
-LMSTUDIO_REST_BASE = (settings.lmstudio_rest_base or "").rstrip("/")
-STREAM_CONTENT_TYPE = "text/event-stream"
-
-
-def default_client_factory() -> httpx.AsyncClient:
-    """Create the shared HTTP client for the app.
-
-    Returns:
-        Configured ``httpx.AsyncClient`` instance.
-    """
-    return httpx.AsyncClient(
-        timeout=httpx.Timeout(settings.http_timeout) if settings.http_timeout is not None else None,
-        limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
-    )
-
-
-@asynccontextmanager
-# pylint: disable=redefined-outer-name
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Manage startup and shutdown lifecycle for the FastAPI app."""
-    client_factory = getattr(app.state, "client_factory", default_client_factory)
-    client = client_factory()
-    app.state.client = client
-    logger.info("Shim started - Ollama version %s", OLLAMA_VERSION)
-    logger.info("LM Studio OpenAI base: %s", LMSTUDIO_OPENAI_BASE)
-    logger.info("LM Studio REST base:   %s", LMSTUDIO_REST_BASE)
-    try:
-        yield
-    finally:
-        await client.aclose()
-
-
-app = FastAPI(title="Ollama → LM Studio Shim", version="1.1.0", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.allowed_origins,
-    allow_methods=["GET", "POST"],
-    allow_headers=["*"],
+import backend
+from constants import ERROR_BACKEND_UNAVAILABLE
+from backend import BackendError, BackendUnavailableError, ModelCache
+from client import default_client_factory
+from deps import get_client
+from middleware import (
+    api_key_middleware,
+    prometheus_middleware,
+    request_id_middleware,
+    request_size_limit_middleware,
+    suppress_shutdown_cancel,
 )
-
-# ------------------------------------------------
-# Middleware
-# ------------------------------------------------
-if settings.debug:
-    logging.getLogger().setLevel(logging.DEBUG)
-logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
-logging.getLogger("httpx").setLevel(logging.DEBUG if settings.debug else logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
-
-
-@app.middleware("http")
-async def request_id_middleware(
-    request: Request, call_next: Callable[[Request], Awaitable[Response]]
-) -> Response:
-    """Attach a request ID header to each request/response pair.
-
-    Args:
-        request: Incoming HTTP request.
-        call_next: Downstream handler.
-
-    Returns:
-        The response produced by the downstream handler.
-    """
-    request_id = request.headers.get("X-Request-Id") or str(uuid4())
-    token = request_id_ctx.set(request_id)
-    try:
-        response = await call_next(request)
-    finally:
-        request_id_ctx.reset(token)
-    response.headers["X-Request-Id"] = request_id
-    return response
-
-
-PUBLIC_PATHS = {"/health", "/ready", "/healthz", "/metrics", "/ping"}
-
-
-@app.middleware("http")
-async def api_key_middleware(
-    request: Request, call_next: Callable[[Request], Awaitable[Response]]
-) -> Response:
-    """Enforce API key authentication on non-public endpoints.
-
-    Args:
-        request: Incoming HTTP request.
-        call_next: Downstream handler.
-
-    Returns:
-        The response produced by the downstream handler.
-    """
-    if not settings.api_key:
-        return await call_next(request)
-    if request.url.path in PUBLIC_PATHS:
-        return await call_next(request)
-    auth = request.headers.get("Authorization", "")
-    if auth != f"Bearer {settings.api_key}":
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-    return await call_next(request)
-
-
-async def get_client() -> httpx.AsyncClient:
-    """Return the shared HTTP client.
-
-    Returns:
-        The shared ``httpx.AsyncClient`` instance.
-    """
-    return app.state.client
-
-
-# ------------------------------------------------
-# Helpers
-# ------------------------------------------------
-def now() -> str:
-    """Return current UTC time in ISO format.
-
-    Returns:
-        ISO-formatted UTC timestamp string.
-    """
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def ollama_base_fields(model: str) -> Dict[str, Any]:
-    """Return base fields for an Ollama response.
-
-    Args:
-        model: Model identifier.
-
-    Returns:
-        Base response fields used by Ollama endpoints.
-    """
-    return {"model": model, "created_at": now()}
-
-
-def _extract_model_id(entry: Dict[str, Any]) -> str:
-    """Extract a model identifier from a model entry.
-
-    Args:
-        entry: Model metadata dictionary from LM Studio.
-
-    Returns:
-        The best-effort model identifier, or an empty string.
-    """
-    for key in ("id", "name", "model"):
-        value = entry.get(key)
-        if value:
-            return value
-    return ""
-
-
-def _ollama_model_name(name: str) -> str:
-    """Normalize Ollama model names by stripping tags (foo:latest -> foo).
-
-    Args:
-        name: Model name, possibly including a tag suffix.
-
-    Returns:
-        Normalized model name without a tag suffix.
-    """
-    if not name:
-        return name
-    return name.split(":")[0]
-
-
-def _entry_is_loaded(entry: Dict[str, Any]) -> bool:
-    """Return True if a model entry appears loaded/active (REST API v0 uses state).
-
-    Args:
-        entry: Model metadata dictionary from LM Studio.
-
-    Returns:
-        True if the model entry looks loaded/active.
-    """
-    for key in ("loaded", "is_loaded", "active"):
-        if entry.get(key) is True:
-            return True
-    state = str(entry.get("state") or entry.get("status") or "").lower()
-    return state in {"loaded", "active", "ready", "running"}
-
-
-
-
-async def _retry(
-    fn: Callable[..., Awaitable[T]],
-    *args: Any,
-    retries: int = 0,
-    delay: float = 0.25,
-    **kwargs: Any,
-) -> T:
-    """Retry a backend operation on transient request errors.
-
-    Args:
-        fn: Awaitable callable to invoke.
-        *args: Positional arguments for the callable.
-        retries: Number of retry attempts on transient failures.
-        delay: Delay between attempts in seconds.
-        **kwargs: Keyword arguments for the callable.
-
-    Returns:
-        Result of the awaited callable.
-
-    Raises:
-        BackendUnavailableError: If retries are exhausted.
-    """
-    for attempt in range(retries + 1):
-        try:
-            return await fn(*args, **kwargs)
-        except httpx.RequestError as exc:
-            if attempt >= retries:
-                raise BackendUnavailableError("LMStudio backend unavailable") from exc
-            await asyncio.sleep(delay)
-    raise BackendUnavailableError("LMStudio backend unavailable")
-
-
-async def _proxy_get(client: httpx.AsyncClient, url: str, retries: int = 0) -> Dict[str, Any]:
-    """Proxy a GET request to the LM Studio backend and return JSON.
-
-    Args:
-        client: Shared HTTP client.
-        url: Full backend URL to request.
-        retries: Number of retry attempts on transient failures.
-
-    Returns:
-        Parsed JSON payload.
-
-    Raises:
-        HTTPException: When the backend is unavailable or returns invalid responses.
-    """
-    try:
-        r = await _retry(client.get, url, retries=retries)
-    except BackendUnavailableError as exc:
-        logger.error(
-            "Backend GET failed",
-            extra={"url": url, "request_id_ctx": request_id_ctx.get("-")},
-            exc_info=True,
-        )
-        raise HTTPException(status_code=502, detail="LMStudio backend unavailable") from exc
-    if r.is_error:
-        logger.error(
-            "Backend GET error",
-            extra={
-                "url": url,
-                "status": r.status_code,
-                "body": r.text,
-                "request_id_ctx": request_id_ctx.get("-"),
-            },
-        )
-        raise HTTPException(status_code=r.status_code, detail=r.text or "LMStudio error")
-    try:
-        return r.json()
-    except (json.JSONDecodeError, ValueError) as exc:
-        logger.error(
-            "Backend returned invalid JSON",
-            extra={"url": url, "response_body": r.text, "request_id_ctx": request_id_ctx.get("-")},
-            exc_info=True,
-        )
-        raise HTTPException(status_code=502, detail="LMStudio returned invalid JSON") from exc
-
-
-async def _proxy_post_json(
-    client: httpx.AsyncClient, url: str, payload: Dict[str, Any], retries: int = 0
-) -> Dict[str, Any]:
-    """Proxy a POST request to the LM Studio backend and return JSON.
-
-    Args:
-        client: Shared HTTP client.
-        url: Full backend URL to request.
-        payload: JSON payload to send.
-        retries: Number of retry attempts on transient failures.
-
-    Returns:
-        Parsed JSON payload.
-
-    Raises:
-        HTTPException: When the backend is unavailable or returns invalid responses.
-    """
-    try:
-        r = await _retry(client.post, url, json=payload, retries=retries)
-    except BackendUnavailableError as exc:
-        logger.error(
-            "Backend POST failed",
-            extra={"url": url, "request_id_ctx": request_id_ctx.get("-")},
-            exc_info=True,
-        )
-        raise HTTPException(status_code=502, detail="LMStudio backend unavailable") from exc
-
-    if r.is_error:
-        # Improve message when JIT is off and model isn't loaded
-        model = ""
-        if r.status_code in (400, 404):
-            model = str(payload.get("model") or "")
-        if model:
-            exists, state = await _model_exists_and_state(client, model)
-            if exists and state and state.lower() in {"not-loaded", "unloaded"}:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        f"LM Studio reports model '{model}' is not loaded. "
-                        "Enable 'Just in Time Model Loading' in LM Studio Server Settings "
-                        "or manually load the model in LM Studio (or via `lms load`)."
-                    ),
-                )
-
-        logger.error(
-            "Backend POST error",
-            extra={
-                "url": url,
-                "status": r.status_code,
-                "body": r.text,
-                "request_id_ctx": request_id_ctx.get("-"),
-            },
-        )
-        raise HTTPException(status_code=r.status_code, detail=r.text or "LMStudio error")
-
-    try:
-        return r.json()
-    except (json.JSONDecodeError, ValueError) as exc:
-        logger.error(
-            "Backend returned invalid JSON",
-            extra={"url": url, "response_body": r.text, "request_id_ctx": request_id_ctx.get("-")},
-            exc_info=True,
-        )
-        raise HTTPException(status_code=502, detail="LMStudio returned invalid JSON") from exc
-
-
-async def _preflight_lmstudio(client: httpx.AsyncClient) -> None:
-    """
-    Check LM Studio is reachable before streaming.
-    Prefer REST /api/v0/models if present; otherwise fall back to /v1/models.
-
-    Args:
-        client: Shared HTTP client.
-
-    Returns:
-        None.
-
-    Raises:
-        HTTPException: If the backend is unreachable or returns an error.
-    """
-    for url in (f"{LMSTUDIO_REST_BASE}/models", f"{LMSTUDIO_OPENAI_BASE}/models"):
-        try:
-            r = await client.get(url, timeout=5.0)
-            if r.status_code == 404:
-                continue
-            r.raise_for_status()
-            return
-        except httpx.RequestError:
-            continue
-        except httpx.HTTPStatusError as exc:
-            logger.error(
-                "LMStudio preflight error",
-                extra={
-                    "url": str(exc.request.url) if exc.request else url,
-                    "status": exc.response.status_code,
-                    "body": exc.response.text,
-                    "request_id_ctx": request_id_ctx.get("-"),
-                },
-            )
-            raise HTTPException(
-                status_code=exc.response.status_code,
-                detail=exc.response.text or "LMStudio error",
-            ) from exc
-    raise HTTPException(status_code=502, detail="LMStudio backend unavailable")
-
-
-async def lm_models(client: httpx.AsyncClient) -> List[Dict[str, Any]]:
-    """
-    Retrieve model list from LM Studio.
-
-    Prefer REST API v0 (/api/v0/models) because it includes both downloaded and loaded models
-    (with a 'state' field). Fall back to OpenAI compat (/v1/models) if REST isn't available.
-
-    Args:
-        client: Shared HTTP client.
-
-    Returns:
-        List of model metadata dictionaries.
-    """
-    # REST v0
-    try:
-        payload = await _proxy_get(client, f"{LMSTUDIO_REST_BASE}/models", retries=1)
-        if isinstance(payload, dict):
-            data = payload.get("data")
-            if isinstance(data, list):
-                return data
-        if isinstance(payload, list):
-            return payload
-    except HTTPException as exc:
-        if exc.status_code != 404:
-            logger.debug("REST models failed: %s", exc.detail)
-
-    # OpenAI compat
-    payload = await _proxy_get(client, f"{LMSTUDIO_OPENAI_BASE}/models", retries=1)
-    if isinstance(payload, dict):
-        data = payload.get("data")
-        if isinstance(data, list):
-            return data
-        models = payload.get("models")
-        if isinstance(models, list):
-            return models
-    if isinstance(payload, list):
-        return payload
-    return []
-
-
-async def _model_exists_and_state(
-    client: httpx.AsyncClient, model: str
-) -> Tuple[bool, Optional[str]]:
-    """Return (exists, state) if the model exists in the REST model list.
-
-    Args:
-        client: Shared HTTP client.
-        model: Requested model name.
-
-    Returns:
-        Tuple of (exists, state).
-    """
-    base = _ollama_model_name(model)
-    try:
-        models = await lm_models(client)
-    except HTTPException:
-        return False, None
-
-    for entry in models:
-        mid = _extract_model_id(entry)
-        if not mid:
-            continue
-        if mid == model or mid == base or _ollama_model_name(mid) == base:
-            return True, str(entry.get("state") or entry.get("status") or "")
-    return False, None
+from routes import health_router, ollama_router, openai_router, version_router
+from utils.factory import coerce_client_factory
+from utils.http import proxy_request
+import state
+from logging_config import logger
+from state import LMSTUDIO_OPENAI_BASE, LMSTUDIO_REST_BASE, OLLAMA_VERSION, SHIM_VERSION
+
+settings = state.settings
+
+
+async def lm_models(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+    """Backward-compatible model list helper for tests."""
+    return await backend.lm_models(client, model_cache=None)
 
 
 async def _resolve_model_id(
-    client: httpx.AsyncClient, requested: str
-) -> Tuple[str, Optional[Dict[str, Any]]]:
-    """
-    Resolve a requested model name to a known LM Studio model id if possible.
-    Works with both REST and OpenAI model lists.
+    client: httpx.AsyncClient,
+    requested: str,
+) -> tuple[str, Optional[dict[str, Any]]]:
+    """Resolve a model identifier via the shim's public wrapper."""
+    return await backend.resolve_model_id(client, None, requested)
 
-    Args:
-        client: Shared HTTP client.
-        requested: Model name requested by the client.
 
-    Returns:
-        Tuple of resolved model id and model entry if found.
-    """
-    if not requested:
-        return requested, None
-    base = _ollama_model_name(requested)
+async def _model_exists_and_state(
+    client: httpx.AsyncClient,
+    model: str,
+) -> tuple[bool, Optional[str]]:
+    """Check existence and state of a model."""
+    return await backend.model_exists_and_state(client, None, model)
 
+
+async def _proxy_get(
+    client: httpx.AsyncClient,
+    url: str,
+    retries: int = 0,
+) -> dict[str, Any]:
+    """GET a JSON payload from the backend with retry handling."""
+    return await proxy_request(client, "GET", url, retries=retries)
+
+
+async def _proxy_post_json(
+    client: httpx.AsyncClient, url: str, payload: dict[str, Any], retries: int = 0
+) -> dict[str, Any]:
+    """POST a JSON payload to the backend with retry handling."""
+    return await proxy_request(client, "POST", url, json_body=payload, retries=retries)
+
+
+async def _init_client(
+    fastapi_app: FastAPI,
+    client_factory: Optional[Callable[[], httpx.AsyncClient]] = None,
+) -> httpx.AsyncClient:
+    """Create the shared HTTP client using the configured factory."""
+    client_factory_attr = getattr(fastapi_app.state, "client_factory", None)
+    resolved_factory = coerce_client_factory(
+        client_factory or client_factory_attr,
+        default_factory=lambda: default_client_factory(state.settings),
+        logger=logger,
+    )
+    return await resolved_factory()
+
+
+async def _close_client(client: httpx.AsyncClient) -> None:
+    """Gracefully close the client respecting the configured timeout."""
     try:
-        models = await lm_models(client)
-    except HTTPException:
-        return requested, None
-
-    # Exact matches first
-    for entry in models:
-        mid = _extract_model_id(entry)
-        if not mid:
-            continue
-        if mid in {requested, base}:
-            return mid, entry
-
-    # Match by stripping tags/publisher-ish prefixes
-    for entry in models:
-        mid = _extract_model_id(entry)
-        if not mid:
-            continue
-        if _ollama_model_name(mid) == base:
-            return mid, entry
-
-    logger.warning("Requested model %s not found; using as-is", requested)
-    return requested, None
+        timeout = state.settings.http_timeout or 5.0
+        await asyncio.wait_for(client.aclose(), timeout=timeout)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.exception("Error closing HTTP client")
 
 
-class ModelSelector:  # pylint: disable=too-few-public-methods
-    """Keep track of the active model selection with concurrency control."""
-
-    def __init__(self) -> None:
-        self._lock = asyncio.Lock()
-        self._active_model: Optional[str] = None
-
-    async def ensure_selected(self, client: httpx.AsyncClient, requested: str) -> str:
-        """Resolve and store the active model id for LM Studio requests.
-
-        NOTE: We do not call load/unload endpoints (not part of the stable HTTP API).
-        JIT + TTL + Auto-Evict handle load/unload inside LM Studio.
-
-        Args:
-            client: Shared HTTP client.
-            requested: Model name requested by the client.
-
-        Returns:
-            The resolved model id to send to LM Studio.
-        """
-        if not requested:
-            return requested
-
-        async with self._lock:
-            model_id, entry = await _resolve_model_id(client, requested)
-            if self._active_model != model_id:
-                logger.info("Model selection %s -> %s", self._active_model, model_id)
-            self._active_model = model_id
-
-            if entry is not None and not _entry_is_loaded(entry):
-                # Allow LM Studio to JIT-load when the request hits the inference endpoint.
-                pass
-
-            return model_id
-
-
-model_selector = ModelSelector()
-
-
-def ollama_done(model: str) -> str:
-    """Return a streaming completion payload with done=true.
-
-    Args:
-        model: Model identifier.
-
-    Returns:
-        NDJSON line with completion payload.
-    """
-    payload = {**ollama_base_fields(model), "done": True, "done_reason": "stop"}
-    return json.dumps(payload) + "\n"
-
-
-def ollama_error(model: str, message: str) -> str:
-    """Return a streaming error payload with done=true.
-
-    Args:
-        model: Model identifier.
-        message: Error message.
-
-    Returns:
-        NDJSON line with error payload.
-    """
-    payload = {**ollama_base_fields(model), "error": message, "done": True, "done_reason": "error"}
-    return json.dumps(payload) + "\n"
-
-
-def openai_stream_error(message: str) -> bytes:
-    """Return an SSE error payload for OpenAI streams.
-
-    Args:
-        message: Error message.
-
-    Returns:
-        Bytes payload in SSE format.
-    """
-    payload = {"error": {"message": message, "type": "server_error"}}
-    return f"data: {json.dumps(payload)}\n\n".encode()
-
-
-# ------------------------------------------------
-# Version
-# ------------------------------------------------
-@app.get("/api/version")
-def version() -> JSONResponse:
-    """Return the shim's Ollama-compatible version payload."""
-    logger.info("api_version")
-    headers = {"X-Ollama-Version": OLLAMA_VERSION, "Server": "Ollama"}
-    return JSONResponse({"version": OLLAMA_VERSION}, headers=headers)
-
-
-@app.get("/")
-def root() -> JSONResponse:
-    """Return a basic liveness response."""
-    headers = {"X-Ollama-Version": OLLAMA_VERSION, "Server": "Ollama"}
-    return JSONResponse({"status": "Ollama is running"}, headers=headers)
-
-
-# ------------------------------------------------
-# Health check endpoints
-# ------------------------------------------------
-@app.get("/health")
-async def health() -> JSONResponse:
-    """Return liveness status and timestamp."""
-    return JSONResponse({"status": "ok", "service": "shim", "timestamp": now()})
-
-
-@app.get("/ping")
-async def ping() -> JSONResponse:
-    """Return a basic liveness response without backend checks."""
-    return JSONResponse({"status": "ok"})
-
-
-@app.get("/ready")
-async def ready(client: httpx.AsyncClient = Depends(get_client)) -> JSONResponse:
-    """Return readiness status after verifying LM Studio is reachable."""
+@asynccontextmanager
+async def lifespan(
+    fastapi_app: FastAPI,
+    client_factory: Optional[Callable[[], httpx.AsyncClient]] = None,
+) -> AsyncGenerator[None, None]:
+    """Manage startup and shutdown lifecycle for the FastAPI app."""
     try:
-        await asyncio.wait_for(_preflight_lmstudio(client), timeout=3.0)
-    except (HTTPException, asyncio.TimeoutError) as exc:
-        raise HTTPException(status_code=503, detail="LMStudio backend unavailable") from exc
-    return JSONResponse(
-        {
-            "status": "ok",
-            "backend": "lmstudio",
-            "version": OLLAMA_VERSION,
-            "timestamp": now(),
-        }
+        client = await _init_client(fastapi_app, client_factory=client_factory)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.error("Failed to create HTTP client", exc_info=True)
+        raise RuntimeError("Failed to start shim") from exc
+
+    fastapi_app.state.client = client
+    fastapi_app.state.model_cache = ModelCache(state.settings.model_cache_ttl_seconds)
+    logger.info(
+        "Shim started",
+        extra={"version": OLLAMA_VERSION},
+    )
+    logger.info(
+        "LM Studio OpenAI base",
+        extra={"base_url": LMSTUDIO_OPENAI_BASE},
+    )
+    logger.info(
+        "LM Studio REST base",
+        extra={"base_url": LMSTUDIO_REST_BASE},
+    )
+    try:
+        yield
+    finally:
+        state.SHUTDOWN_IN_PROGRESS = True
+        shutdown_event = getattr(fastapi_app.state, "shutdown_event", None)
+        if shutdown_event is not None:
+            shutdown_event.set()
+        await _close_client(client)
+
+
+async def backend_error_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """Return a consistent backend error response.
+
+    The FastAPI ``add_exception_handler`` expects a handler that accepts a generic
+    ``Exception``. We therefore accept ``exc`` as ``Exception`` and, if it is a
+    ``BackendError``, format the response accordingly. For any other exception type,
+    a generic error response is returned.
+    """
+    if isinstance(exc, BackendError):
+        return JSONResponse(
+            {"error": exc.error, "detail": exc.detail},
+            status_code=exc.status_code,
+        )
+    # Fallback for unexpected exception types
+    return JSONResponse({"error": "unknown_error", "detail": str(exc)}, status_code=500)
+
+
+async def backend_unavailable_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """Return a consistent backend unavailable response.
+
+    ``exc`` is accepted as a generic ``Exception`` to satisfy FastAPI's type
+    expectations. If it is a ``BackendUnavailableError``, we format the response;
+    otherwise, a generic error response is returned.
+    """
+    if isinstance(exc, BackendUnavailableError):
+        return JSONResponse(
+            {"error": ERROR_BACKEND_UNAVAILABLE, "detail": str(exc)},
+            status_code=503,
+        )
+    return JSONResponse({"error": "unknown_error", "detail": str(exc)}, status_code=500)
+
+
+
+def create_app() -> FastAPI:
+    """Factory that builds the FastAPI instance with all routers & middleware."""
+    fastapi_app = FastAPI(
+        title="Ollama to LM Studio Shim",
+        version=SHIM_VERSION,
+        lifespan=lifespan,
+    )
+    fastapi_app.state.shutdown_event = asyncio.Event()
+    fastapi_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=state.settings.allowed_origins,
+        allow_methods=["GET", "POST"],
+        allow_headers=["*"],
+        allow_credentials=False,
     )
 
+    fastapi_app.middleware("http")(suppress_shutdown_cancel)
+    fastapi_app.middleware("http")(request_size_limit_middleware)
+    fastapi_app.middleware("http")(request_id_middleware)
+    fastapi_app.middleware("http")(api_key_middleware)
+    fastapi_app.middleware("http")(prometheus_middleware)
 
-@app.get("/healthz")
-async def healthz(client: httpx.AsyncClient = Depends(get_client)) -> JSONResponse:
-    """Return a combined shim/backend health payload."""
-    backend_ok = True
+    fastapi_app.include_router(version_router)
+    fastapi_app.include_router(health_router)
+    fastapi_app.include_router(openai_router)
+    fastapi_app.include_router(ollama_router)
+
+    fastapi_app.add_exception_handler(BackendError, backend_error_handler)
+    fastapi_app.add_exception_handler(BackendUnavailableError, backend_unavailable_handler)
+
+    return fastapi_app
+
+
+app = create_app()
+
+
+def run() -> None:
+    """Start the Uvicorn server for the shim."""
     try:
-        await asyncio.wait_for(_preflight_lmstudio(client), timeout=1.0)
-    except (HTTPException, asyncio.TimeoutError):
-        backend_ok = False
-    payload = {
-        "shim": "ok",
-        "backend": "ok" if backend_ok else "unavailable",
-        "timestamp": now(),
-    }
-    status = 200 if backend_ok else 503
-    return JSONResponse(payload, status_code=status)
-
-
-@app.get("/metrics")
-async def metrics(client: httpx.AsyncClient = Depends(get_client)) -> PlainTextResponse:
-    """Return basic Prometheus-style metrics."""
-    up = 0
-    try:
-        await asyncio.wait_for(_preflight_lmstudio(client), timeout=1.0)
-        up = 1
-    except (HTTPException, asyncio.TimeoutError):
-        up = 0
-    body = f"shim_up {up}\nshim_version{{version=\"{OLLAMA_VERSION}\"}} 1\n"
-    return PlainTextResponse(body)
-
-
-# ------------------------------------------------
-# OpenAI Compatibility (VSCode extensions often hit these)
-# ------------------------------------------------
-@app.get("/v1/models")
-async def openai_models(client: httpx.AsyncClient = Depends(get_client)) -> Dict[str, Any]:
-    """Return OpenAI-compatible model list."""
-    models = await lm_models(client)
-    created = int(time.time())
-    data = []
-    seen = set()
-    for entry in models:
-        model_id = _extract_model_id(entry)
-        if not model_id or model_id in seen:
-            continue
-        data.append(
-            {
-                "id": model_id,
-                "object": "model",
-                "created": created,
-                "owned_by": entry.get("owned_by", "lmstudio"),
-            }
+        uvicorn.run(
+            app,
+            host=state.settings.host,
+            port=state.settings.port,
+            timeout_graceful_shutdown=cast(int | None, 0.5),
         )
-        seen.add(model_id)
-    logger.info("openai_models count=%s", len(data))
-    return {"object": "list", "data": data}
-
-
-class ChatCompletionRequest(BaseModel):  # pylint: disable=too-few-public-methods
-    """OpenAI-compatible chat completion request body."""
-    model: str
-    messages: List[Dict[str, Any]] = Field(default_factory=list)
-    temperature: float = 0.8
-    stream: bool = True
-    # Allow OpenAI clients to pass ttl directly, or ignore.
-    ttl: Optional[int] = None
-    keep_alive: Optional[Any] = None
-    model_config = ConfigDict(extra="allow")
-
-
-@app.post("/v1/chat/completions")
-async def openai_chat(
-    req: ChatCompletionRequest, client: httpx.AsyncClient = Depends(get_client)
-) -> Response:
-    """OpenAI-compatible chat completions endpoint (streaming supported)."""
-    body = req.model_dump(exclude_none=True)
-
-    body["model"] = await model_selector.ensure_selected(client, req.model)
-    if req.keep_alive is not None or "ttl" not in body:
-        # Convert keep_alive -> ttl for LM Studio.
-        body = ttl_processor.inject_ttl(body, keep_alive=req.keep_alive)
-    body.pop("keep_alive", None)
-
-    if not body.get("stream", False):
-        return JSONResponse(
-            await _proxy_post_json(
-                client,
-                f"{LMSTUDIO_OPENAI_BASE}/chat/completions",
-                body,
-            )
-        )
-
-    await _preflight_lmstudio(client)
-
-    async def stream() -> AsyncGenerator[bytes, None]:
-        try:
-            async with client.stream(
-                "POST",
-                f"{LMSTUDIO_OPENAI_BASE}/chat/completions",
-                json=body,
-            ) as r:
-                r.raise_for_status()
-                try:
-                    async for chunk in r.aiter_raw():
-                        if chunk:
-                            yield chunk
-                except httpx.StreamConsumed:
-                    if r.content:
-                        yield r.content
-        except asyncio.CancelledError:
-            logger.info("openai_chat stream cancelled")
-            return
-        except httpx.HTTPStatusError as exc:
-            logger.error(
-                "LMStudio error",
-                extra={
-                    "url": (
-                        str(exc.request.url)
-                        if exc.request
-                        else f"{LMSTUDIO_OPENAI_BASE}/chat/completions"
-                    ),
-                    "status": exc.response.status_code,
-                    "body": exc.response.text,
-                },
-            )
-            yield openai_stream_error(exc.response.text or "LMStudio error")
-            yield b"data: [DONE]\n\n"
-        except httpx.RequestError:
-            logger.error(
-                "LMStudio request failed",
-                extra={"url": f"{LMSTUDIO_OPENAI_BASE}/chat/completions"},
-                exc_info=True,
-            )
-            yield openai_stream_error("LMStudio backend unavailable")
-            yield b"data: [DONE]\n\n"
-        except httpx.HTTPError:
-            logger.error(
-                "LMStudio HTTP error",
-                extra={"url": f"{LMSTUDIO_OPENAI_BASE}/chat/completions"},
-                exc_info=True,
-            )
-            yield openai_stream_error("LMStudio HTTP error")
-            yield b"data: [DONE]\n\n"
-
-    return StreamingResponse(stream(), media_type=STREAM_CONTENT_TYPE)
-
-
-class CompletionRequest(BaseModel):  # pylint: disable=too-few-public-methods
-    """OpenAI-compatible completion request body."""
-    model: str
-    prompt: Optional[Any] = None
-    temperature: float = 0.8
-    stream: bool = True
-    ttl: Optional[int] = None
-    keep_alive: Optional[Any] = None
-    model_config = ConfigDict(extra="allow")
-
-
-@app.post("/v1/completions")
-async def openai_completions(
-    req: CompletionRequest, client: httpx.AsyncClient = Depends(get_client)
-) -> Response:
-    """OpenAI-compatible text completions endpoint (streaming supported)."""
-    body = req.model_dump(exclude_none=True)
-
-    body["model"] = await model_selector.ensure_selected(client, req.model)
-    if req.keep_alive is not None or "ttl" not in body:
-        # Convert keep_alive -> ttl for LM Studio.
-        body = ttl_processor.inject_ttl(body, keep_alive=req.keep_alive)
-    body.pop("keep_alive", None)
-
-    if not body.get("stream", False):
-        result = await _proxy_post_json(client, f"{LMSTUDIO_OPENAI_BASE}/completions", body)
-        return JSONResponse(result)
-
-    await _preflight_lmstudio(client)
-
-    async def stream() -> AsyncGenerator[bytes, None]:
-        try:
-            async with client.stream("POST", f"{LMSTUDIO_OPENAI_BASE}/completions", json=body) as r:
-                r.raise_for_status()
-                try:
-                    async for chunk in r.aiter_raw():
-                        if chunk:
-                            yield chunk
-                except httpx.StreamConsumed:
-                    if r.content:
-                        yield r.content
-        except asyncio.CancelledError:
-            logger.info("openai_completions stream cancelled")
-            return
-        except httpx.HTTPStatusError as exc:
-            logger.error(
-                "LMStudio error",
-                extra={
-                    "url": (
-                        str(exc.request.url)
-                        if exc.request
-                        else f"{LMSTUDIO_OPENAI_BASE}/completions"
-                    ),
-                    "status": exc.response.status_code,
-                    "body": exc.response.text,
-                },
-            )
-            yield openai_stream_error(exc.response.text or "LMStudio error")
-            yield b"data: [DONE]\n\n"
-        except httpx.RequestError:
-            logger.error(
-                "LMStudio request failed",
-                extra={"url": f"{LMSTUDIO_OPENAI_BASE}/completions"},
-                exc_info=True,
-            )
-            yield openai_stream_error("LMStudio backend unavailable")
-            yield b"data: [DONE]\n\n"
-        except httpx.HTTPError:
-            logger.error(
-                "LMStudio HTTP error",
-                extra={"url": f"{LMSTUDIO_OPENAI_BASE}/completions"},
-                exc_info=True,
-            )
-            yield openai_stream_error("LMStudio HTTP error")
-            yield b"data: [DONE]\n\n"
-
-    return StreamingResponse(stream(), media_type=STREAM_CONTENT_TYPE)
-
-
-# ------------------------------------------------
-# Tags (Model List)
-# ------------------------------------------------
-class TagItem(BaseModel):  # pylint: disable=too-few-public-methods
-    """Ollama-compatible tag entry."""
-    name: str
-    model: str
-    modified_at: str
-    size: int = 0
-    digest: str = ""
-    details: Dict[str, Any] = Field(default_factory=dict)
-
-
-class TagResponse(BaseModel):  # pylint: disable=too-few-public-methods
-    """Ollama-compatible tag list response."""
-    models: List[TagItem]
-
-
-@app.get("/api/tags", response_model=TagResponse)
-async def tags(client: httpx.AsyncClient = Depends(get_client)) -> Dict[str, Any]:
-    """Return Ollama-compatible tag list (models)."""
-    models = await lm_models(client)
-    tags_list = []
-    for entry in models:
-        model_id = _extract_model_id(entry)
-        if not model_id:
-            continue
-        name = model_id if ":" in model_id else f"{model_id}:latest"
-        details = entry.get("details", {"family": model_id, "state": entry.get("state")})
-        tags_list.append(
-            {
-                "name": name,
-                "model": name,
-                "modified_at": now(),
-                "size": int(entry.get("size", 0) or 0),
-                "digest": entry.get("digest", ""),
-                "details": details,
-            }
-        )
-    return {"models": tags_list}
-
-
-# ------------------------------------------------
-# Show Model
-# ------------------------------------------------
-class ShowResponse(BaseModel):  # pylint: disable=too-few-public-methods
-    """Ollama-compatible show response body."""
-    license: str
-    modelfile: str
-    parameters: Dict[str, Any]
-    template: str
-    capabilities: List[str]
-    details: Dict[str, Any]
-    model_info: Dict[str, Any]
-
-
-@app.post("/api/show", response_model=ShowResponse)
-async def show(req: Request) -> Response:
-    """Return Ollama-compatible model detail payload."""
-    body = await req.json()
-    name = body.get("name") or body.get("model") or body.get("id") or ""
-    if not name:
-        return JSONResponse({"error": "missing model name"}, status_code=400)
-    model = _ollama_model_name(name)
-    return JSONResponse({
-        "license": "unknown",
-        "modelfile": "",
-        "parameters": {},
-        "template": "",
-        "capabilities": ["completion", "chat", "tools"],
-        "details": {"family": model},
-        "model_info": {},
-    })
-
-
-# ------------------------------------------------
-# Generate (prompt-based)
-# ------------------------------------------------
-class GenerateRequest(BaseModel):  # pylint: disable=too-few-public-methods
-    """Ollama-compatible generate request body."""
-    model: str
-    prompt: str
-    temperature: float = 0.8
-    stop: Optional[str] = None
-    stream: bool = True
-
-    # Ollama lifecycle: controls how long the model stays loaded after use.
-    # This shim maps keep_alive -> LM Studio 'ttl' (idle TTL seconds).
-    keep_alive: Optional[Any] = None
-
-    model_config = ConfigDict(extra="allow")
-
-
-class GenerateResponse(BaseModel):  # pylint: disable=too-few-public-methods
-    """Ollama-compatible generate response body."""
-    model: str
-    created_at: str
-    response: str
-    done: bool
-    done_reason: str
-
-
-@app.post("/api/generate", response_model=GenerateResponse)
-async def generate(
-    req: GenerateRequest, client: httpx.AsyncClient = Depends(get_client)
-) -> Response:
-    """Generate text from a prompt (Ollama-compatible)."""
-    response_model = req.model or _ollama_model_name(req.model)
-    model = await model_selector.ensure_selected(client, req.model)
-
-    payload: Dict[str, Any] = {
-        "model": model,
-        "prompt": req.prompt,
-        "temperature": req.temperature,
-        "stop": req.stop,
-        "stream": req.stream,
-    }
-    # Convert keep_alive -> ttl for LM Studio.
-    payload = ttl_processor.inject_ttl(payload, keep_alive=req.keep_alive)
-
-    if not payload["stream"]:
-        r = await _proxy_post_json(client, f"{LMSTUDIO_OPENAI_BASE}/completions", payload)
-        text = r["choices"][0].get("text", "")
-        return JSONResponse({
-            **ollama_base_fields(response_model),
-            "response": text,
-            "done": True,
-            "done_reason": "stop",
-        })
-
-    await _preflight_lmstudio(client)
-
-    async def stream() -> AsyncGenerator[str, None]:
-        try:
-            async with client.stream(
-                "POST",
-                f"{LMSTUDIO_OPENAI_BASE}/completions",
-                json=payload,
-            ) as r:
-                r.raise_for_status()
-                async for line in r.aiter_lines():
-                    if not line:
-                        continue
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if not data:
-                        continue
-                    if data == "[DONE]":
-                        yield ollama_done(response_model)
-                        return
-                    try:
-                        chunk = json.loads(data)
-                    except json.JSONDecodeError:
-                        logger.debug("generate stream skipped non-JSON data: %s", data)
-                        continue
-                    delta = chunk["choices"][0].get("text")
-                    if delta:
-                        yield (
-                            json.dumps(
-                                {
-                                    **ollama_base_fields(response_model),
-                                    "response": delta,
-                                    "done": False,
-                                }
-                            )
-                            + "\n"
-                        )
-        except asyncio.CancelledError:
-            logger.info("generate stream cancelled")
-            return
-        except httpx.HTTPStatusError as exc:
-            logger.error(
-                "LMStudio error",
-                extra={
-                    "url": (
-                        str(exc.request.url)
-                        if exc.request
-                        else f"{LMSTUDIO_OPENAI_BASE}/completions"
-                    ),
-                    "status": exc.response.status_code,
-                    "body": exc.response.text,
-                },
-            )
-            yield ollama_error(response_model, exc.response.text or "LMStudio error")
-        except httpx.RequestError:
-            logger.error(
-                "LMStudio request failed",
-                extra={"url": f"{LMSTUDIO_OPENAI_BASE}/completions"},
-                exc_info=True,
-            )
-            yield ollama_error(response_model, "LMStudio backend unavailable")
-        except httpx.HTTPError:
-            logger.error(
-                "LMStudio HTTP error",
-                extra={"url": f"{LMSTUDIO_OPENAI_BASE}/completions"},
-                exc_info=True,
-            )
-            yield ollama_error(response_model, "LMStudio HTTP error")
-
-    return StreamingResponse(stream(), media_type="application/x-ndjson")
-
-
-# ------------------------------------------------
-# Chat (messages-based)
-# ------------------------------------------------
-class ChatMessage(BaseModel):  # pylint: disable=too-few-public-methods
-    """Chat message payload."""
-    role: str
-    content: str
-
-
-class ChatRequest(BaseModel):  # pylint: disable=too-few-public-methods
-    """Ollama-compatible chat request body."""
-    model: str
-    messages: List[ChatMessage] = Field(default_factory=list)
-    system: Optional[str] = None
-    temperature: float = 0.8
-    stream: bool = True
-    tools: Optional[List[Dict[str, Any]]] = None
-    tool_choice: Optional[Dict[str, Any]] = None
-
-    # Ollama lifecycle knob
-    keep_alive: Optional[Any] = None
-
-    model_config = ConfigDict(extra="allow")
-
-
-@app.post("/api/chat")
-async def chat(  # pylint: disable=too-many-statements
-    req: ChatRequest, client: httpx.AsyncClient = Depends(get_client)
-) -> Response:
-    """Chat with a model using messages (Ollama-compatible)."""
-    response_model = req.model or _ollama_model_name(req.model)
-    model = await model_selector.ensure_selected(client, req.model)
-
-    messages = [message.model_dump() for message in req.messages]
-    if req.system:
-        messages.insert(0, {"role": "system", "content": req.system})
-
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "temperature": req.temperature,
-        "stream": req.stream,
-        "tools": req.tools,
-        "tool_choice": req.tool_choice,
-    }
-    # Convert keep_alive -> ttl for LM Studio.
-    payload = ttl_processor.inject_ttl(payload, keep_alive=req.keep_alive)
-
-    if not payload["stream"]:
-        r = await _proxy_post_json(client, f"{LMSTUDIO_OPENAI_BASE}/chat/completions", payload)
-        msg = r["choices"][0].get("message", {})
-        return JSONResponse(
-            {
-                **ollama_base_fields(response_model),
-                "message": msg,
-                "done": True,
-                "done_reason": "stop",
-            }
-        )
-
-    await _preflight_lmstudio(client)
-
-    async def stream() -> AsyncGenerator[str, None]:
-        role_sent = False
-        try:
-            async with client.stream(
-                "POST",
-                f"{LMSTUDIO_OPENAI_BASE}/chat/completions",
-                json=payload,
-            ) as r:
-                r.raise_for_status()
-                async for line in r.aiter_lines():
-                    if not line:
-                        continue
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if not data:
-                        continue
-                    if data == "[DONE]":
-                        yield ollama_done(response_model)
-                        return
-                    try:
-                        chunk = json.loads(data)
-                    except json.JSONDecodeError:
-                        logger.debug("chat stream skipped non-JSON data: %s", data)
-                        continue
-                    delta = chunk["choices"][0].get("delta", {})
-                    if delta:
-                        if not role_sent and "role" not in delta:
-                            delta = {"role": "assistant", **delta}
-                            role_sent = True
-                        elif "role" in delta:
-                            role_sent = True
-                        yield (
-                            json.dumps(
-                                {
-                                    **ollama_base_fields(response_model),
-                                    "message": delta,
-                                    "done": False,
-                                }
-                            )
-                            + "\n"
-                        )
-        except asyncio.CancelledError:
-            logger.info("chat stream cancelled")
-            return
-        except httpx.HTTPStatusError as exc:
-            logger.error(
-                "LMStudio error",
-                extra={
-                    "url": (
-                        str(exc.request.url)
-                        if exc.request
-                        else f"{LMSTUDIO_OPENAI_BASE}/chat/completions"
-                    ),
-                    "status": exc.response.status_code,
-                    "body": exc.response.text,
-                },
-            )
-            yield ollama_error(response_model, exc.response.text or "LMStudio error")
-        except httpx.RequestError:
-            logger.error(
-                "LMStudio request failed",
-                extra={"url": f"{LMSTUDIO_OPENAI_BASE}/chat/completions"},
-                exc_info=True,
-            )
-            yield ollama_error(response_model, "LMStudio backend unavailable")
-        except httpx.HTTPError:
-            logger.error(
-                "LMStudio HTTP error",
-                extra={"url": f"{LMSTUDIO_OPENAI_BASE}/chat/completions"},
-                exc_info=True,
-            )
-            yield ollama_error(response_model, "LMStudio HTTP error")
-
-    return StreamingResponse(stream(), media_type="application/x-ndjson")
-
-
-# ------------------------------------------------
-# Embeddings
-# ------------------------------------------------
-class EmbeddingsRequest(BaseModel):  # pylint: disable=too-few-public-methods
-    """Ollama-compatible embeddings request body."""
-    model: str
-    prompt: str
-    keep_alive: Optional[Any] = None
-    model_config = ConfigDict(extra="allow")
-
-
-@app.post("/api/embeddings")
-async def embeddings(
-    req: EmbeddingsRequest,
-    client: httpx.AsyncClient = Depends(get_client),
-) -> Dict[str, Any]:
-    """Generate embeddings for a prompt (Ollama-compatible)."""
-    model = await model_selector.ensure_selected(client, req.model)
-    payload: Dict[str, Any] = {"model": model, "input": req.prompt}
-    # Convert keep_alive -> ttl for LM Studio.
-    payload = ttl_processor.inject_ttl(payload, keep_alive=req.keep_alive)
-
-    r = await _proxy_post_json(client, f"{LMSTUDIO_OPENAI_BASE}/embeddings", payload)
-    data = r["data"][0]["embedding"]
-    return {"embedding": data}
-
-
-# ------------------------------------------------
-# Process Status (show loaded models)
-# ------------------------------------------------
-@app.get("/api/ps")
-async def ps(client: httpx.AsyncClient = Depends(get_client)) -> Dict[str, Any]:
-    """Return best-effort process status (loaded models)."""
-    models = await lm_models(client)
-    loaded = []
-    for entry in models:
-        if _entry_is_loaded(entry):
-            mid = _extract_model_id(entry)
-            if mid:
-                loaded.append({"name": mid})
-    return {"models": loaded}
-
-
-# ------------------------------------------------
-# Stubbed Lifecycle Endpoints (must exist for some clients)
-# ------------------------------------------------
-@app.post("/api/create")
-async def create() -> JSONResponse:
-    """Stub: create a model (always success)."""
-    return JSONResponse({"status": "success"}, status_code=200)
-
-
-@app.post("/api/pull")
-async def pull() -> JSONResponse:
-    """Stub: pull a model (always success)."""
-    return JSONResponse({"status": "success"}, status_code=200)
-
-
-@app.post("/api/push")
-async def push() -> JSONResponse:
-    """Stub: push a model (always success)."""
-    return JSONResponse({"status": "success"}, status_code=200)
-
-
-@app.post("/api/delete")
-async def delete(req: Request, client: httpx.AsyncClient = Depends(get_client)) -> JSONResponse:
-    """Best-effort delete/unload (maps to a short TTL request)."""
-    try:
-        body = await req.json()
-    except (json.JSONDecodeError, ValueError):
-        body = {}
-
-    name = body.get("name") or body.get("model") or body.get("id") or ""
-    if name:
-        model = await model_selector.ensure_selected(client, name)
-        # No-op request to ensure TTL is applied for near-term eviction.
-        payload = {
-            "model": model,
-            "prompt": "",
-            "max_tokens": 0,
-            "stream": False,
-            "ttl": settings.unload_ttl_seconds,
-        }
-        try:
-            # Some backends may reject max_tokens=0; if so, ignore.
-            await _proxy_post_json(client, f"{LMSTUDIO_OPENAI_BASE}/completions", payload)
-        except HTTPException:
-            pass
-
-    return JSONResponse({"status": "success"}, status_code=200)
+    except KeyboardInterrupt:
+        pass
 
 
 def run_server() -> None:
-    """Start the Uvicorn server for the shim."""
-    uvicorn.run(app, host=settings.host, port=settings.port)
+    """Backward-compatible entry point."""
+    run()
+
+
+__all__ = ["app", "settings", "get_client"]
+
+# Re-exported for tests and external tooling.
+ModelSelector = backend.ModelSelector
+model_selector = backend.model_selector
+stream_post_raw = backend.stream_post_raw
+__all__ += ["ModelSelector", "model_selector", "stream_post_raw"]
 
 
 if __name__ == "__main__":
-    run_server()
+    run()

@@ -1,0 +1,10 @@
+.DS_Store
+.venv/
+.ruff_cache/
+.pytest_cache/
+__pycache__/
+backup.txt
+routes/__pychache__/
+tests/__pycache__/
+utils/__pycache__/
+routes/__pycache__/
