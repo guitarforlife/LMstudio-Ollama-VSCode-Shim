@@ -49,7 +49,8 @@ Environment variables:
 - `SHIM_DEFAULT_STOP`: Default stop value for completion requests when not provided.
 - `SHIM_HOST`: Host interface to bind (default: `0.0.0.0`).
 - `SHIM_PORT`: Port to bind (default: `11434`).
-- `SHIM_WORKERS`: Uvicorn worker count (default: `4` when `SHIM_DEBUG` is false).
+- `SHIM_WORKERS`: Uvicorn worker count (default: `1`).
+- `DISABLE_UVLOOP`: Set to `1` to disable uvloop even if installed.
 
 ## Run locally
 

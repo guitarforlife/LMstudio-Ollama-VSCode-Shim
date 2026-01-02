@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 from backend import (
     ModelCache,
+    ModelEntry,
     lm_models,
     model_selector,
     post_openai_json,
@@ -22,7 +23,7 @@ class BackendAPI:
         self,
         client: BackendLike,
         model_cache: Optional[ModelCache],
-    ) -> list[Dict[str, Any]]:
+    ) -> Tuple[ModelEntry, ...]:
         """Fetch model metadata from the backend."""
         return await lm_models(client, model_cache=model_cache)
 

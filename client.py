@@ -40,7 +40,14 @@ def default_client_factory(settings: Settings) -> httpx.AsyncClient:
         max_keepalive_connections=settings.max_keepalive_connections or None,
         max_connections=settings.max_connections or None,
     )
-    return httpx.AsyncClient(timeout=timeout, limits=limits, verify=settings.verify_ssl)
+    transport = httpx.AsyncHTTPTransport(retries=3, verify=settings.verify_ssl)
+    return httpx.AsyncClient(
+        timeout=timeout,
+        limits=limits,
+        verify=settings.verify_ssl,
+        http2=True,
+        transport=transport,
+    )
 
 
 async def request_json(

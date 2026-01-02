@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import multiprocessing
+import os
 import sys
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Callable, Optional, cast
@@ -88,23 +89,28 @@ def _patch_uvicorn_subprocess() -> None:
 
     _UVICORN_SUBPROCESS_ORIGINAL = original
     setattr(_wrapped_subprocess_started, "_shim_wrapped", True)
-    uvicorn_subprocess.subprocess_started = _wrapped_subprocess_started
+    setattr(uvicorn_subprocess, "subprocess_started", _wrapped_subprocess_started)
 
 
 _patch_uvicorn_subprocess()
 
 
-def install_uvloop() -> None:
+def install_uvloop() -> bool:
     """Install uvloop if available for faster event loops."""
-    if UVLOOP is None:
-        return
+    if UVLOOP is not None and not os.getenv("DISABLE_UVLOOP"):
+        try:
+            UVLOOP.install()
+            logger.info("uvloop enabled")
+            return True
+        except (RuntimeError, ValueError):
+            return False
     try:
-        UVLOOP.install()
-        logger.info("uvloop enabled")
-    except (RuntimeError, ValueError):
+        asyncio.get_event_loop_policy().set_event_loop(asyncio.new_event_loop())
+    except RuntimeError:
         pass
+    return False
 
-async def lm_models(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+async def lm_models(client: httpx.AsyncClient) -> tuple[backend.ModelEntry, ...]:
     """Backward-compatible model list helper for tests."""
     return await backend.lm_models(client, model_cache=None)
 
@@ -112,7 +118,7 @@ async def lm_models(client: httpx.AsyncClient) -> list[dict[str, Any]]:
 async def _resolve_model_id(
     client: httpx.AsyncClient,
     requested: str,
-) -> tuple[str, Optional[dict[str, Any]]]:
+) -> tuple[str, Optional[backend.ModelEntry]]:
     """Resolve a model identifier via the shim's public wrapper."""
     return await backend.resolve_model_id(client, None, requested)
 
@@ -274,10 +280,10 @@ app = create_app()
 def run() -> None:
     """Start the Uvicorn server for the shim."""
     try:
-        install_uvloop()
+        use_uvloop = install_uvloop()
         workers = state.settings.workers
-        if workers is None and not state.settings.debug:
-            workers = 4
+        if workers is None:
+            workers = 1
         app_target: Any = app
         if workers and workers > 1:
             app_target = "main:app"
@@ -287,7 +293,7 @@ def run() -> None:
             port=state.settings.port,
             timeout_graceful_shutdown=cast(int | None, 0.5),
             workers=workers,
-            loop="uvloop" if UVLOOP is not None else "asyncio",
+            loop="uvloop" if use_uvloop else "asyncio",
         )
     except KeyboardInterrupt:
         pass

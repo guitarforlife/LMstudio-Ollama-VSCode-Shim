@@ -2,29 +2,54 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+import importlib
+from typing import Any, Callable, Optional, cast
+
+_orjson_dumps = None
+_orjson_loads = None
+JSON_DECODE_ERROR_FALLBACK = None
+_opt_serialize_numpy = 0
 
 try:
-    import orjson as ORJSON
+    _orjson_module = importlib.import_module("orjson")
 except ModuleNotFoundError:
-    ORJSON = None
+    _orjson_module = None
+else:
+    try:
+        _orjson_dumps = getattr(_orjson_module, "dumps")
+        _orjson_loads = getattr(_orjson_module, "loads")
+        JSON_DECODE_ERROR_FALLBACK = getattr(_orjson_module, "JSONDecodeError", ValueError)
+        _opt_serialize_numpy = getattr(_orjson_module, "OPT_SERIALIZE_NUMPY", 0)
+    except AttributeError:
+        _orjson_module = None
+    else:
+        if not callable(_orjson_dumps) or not callable(_orjson_loads):
+            _orjson_module = None
 
-if ORJSON is not None:
-    JSONDecodeError = ORJSON.JSONDecodeError
+# --- orjson branch ---------------------------------------------------------
+if _orjson_module is not None:
+    if not callable(_orjson_dumps) or not callable(_orjson_loads):
+        raise ValueError("orjson.dumps/loads unavailable")
+    _orjson_dumps_fn = cast(Callable[..., bytes], _orjson_dumps)
+    _orjson_loads_fn = cast(Callable[..., Any], _orjson_loads)
+
+    JSONDecodeError = JSON_DECODE_ERROR_FALLBACK or ValueError
 
     def dumps(obj: Any, *, option: Optional[int] = None) -> str:
         """Serialize to JSON string with orjson."""
-        opts = ORJSON.OPT_SERIALIZE_NUMPY if option is None else option
-        return ORJSON.dumps(obj, option=opts).decode()
+        opts = _opt_serialize_numpy if option is None else option
+        return _orjson_dumps_fn(obj, option=opts).decode()
 
     def dumps_bytes(obj: Any, *, option: Optional[int] = None) -> bytes:
         """Serialize to JSON bytes with orjson."""
-        opts = ORJSON.OPT_SERIALIZE_NUMPY if option is None else option
-        return ORJSON.dumps(obj, option=opts)
+        opts = _opt_serialize_numpy if option is None else option
+        return _orjson_dumps_fn(obj, option=opts)
 
     def loads(data: Any) -> Any:
         """Parse JSON from str/bytes with orjson."""
-        return ORJSON.loads(data)
+        return _orjson_loads_fn(data)
+
+# --- stdlib json fallback --------------------------------------------------
 else:
     import json as JSON
 

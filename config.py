@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     unload_ttl_seconds: int = 0
     host: str = "0.0.0.0"
     port: int = 11434
-    workers: Optional[int] = None
+    workers: Optional[int] = 1
 
     max_connections: int = 50
     max_keepalive_connections: int = 20

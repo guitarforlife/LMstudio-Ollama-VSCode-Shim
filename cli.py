@@ -19,12 +19,12 @@ def main() -> None:
     if args.debug:
         os.environ["SHIM_DEBUG"] = "1"
 
-    app_main.install_uvloop()
+    use_uvloop = app_main.install_uvloop()
     uvicorn.run(
         app_main.app,
         host=args.host,
         port=args.port,
-        loop="uvloop" if app_main.UVLOOP is not None else "asyncio",
+        loop="uvloop" if use_uvloop else "asyncio",
     )
 
 
