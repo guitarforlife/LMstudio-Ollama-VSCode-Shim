@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional, TYPE_CHECKING
 from uuid import uuid4
 
 from fastapi import Request
@@ -13,6 +13,13 @@ from logging_config import request_id_ctx
 from state import settings
 
 logger = logging.getLogger("lmstudio_shim")
+
+if TYPE_CHECKING:
+    from prometheus_client import Counter as CounterType
+    from prometheus_client import Histogram as HistogramType
+else:
+    CounterType = Any
+    HistogramType = Any
 
 try:
     from prometheus_client import Counter, Histogram
@@ -24,10 +31,11 @@ except ImportError:  # pragma: no cover - optional dependency
     Histogram = None
 
 
-request_count: Optional["Counter"] = None
-request_latency: Optional["Histogram"] = None
+request_count: Optional[CounterType] = None
+request_latency: Optional[HistogramType] = None
 
 if PROMETHEUS_AVAILABLE:
+    assert Counter is not None and Histogram is not None
     request_count = Counter(
         "shim_requests_total",
         "Total HTTP requests",
