@@ -1,6 +1,10 @@
 """Model and generate endpoint tests."""
 
+# pylint: disable=unused-argument
+
 # pylint: disable=duplicate-code
+
+from typing import Any, cast
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -20,7 +24,7 @@ async def test_openai_models(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(backend_api.api, "models", fake_models)
 
     async with main.lifespan(main.app):
-        transport = ASGITransport(app=main.app)
+        transport = ASGITransport(app=cast(Any, main.app))
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.get("/v1/models")
     assert resp.status_code == 200
@@ -46,7 +50,7 @@ async def test_generate_non_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(backend_api.api, "post_openai_json", fake_post)
 
     async with main.lifespan(main.app):
-        transport = ASGITransport(app=main.app)
+        transport = ASGITransport(app=cast(Any, main.app))
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post(
                 "/api/generate",
@@ -70,7 +74,7 @@ async def test_model_selector_caches_resolved_id(monkeypatch: pytest.MonkeyPatch
     selector = main.ModelSelector()
     monkeypatch.setattr(backend, "_resolve_model_id", fake_resolve)
 
-    dummy_client = object()
+    dummy_client = cast(Any, object())
     assert await selector.ensure_selected(dummy_client, None, "model-a") == "model-a:resolved"
     assert await selector.ensure_selected(dummy_client, None, "model-a") == "model-a:resolved"
     assert calls["count"] == 1

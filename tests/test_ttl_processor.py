@@ -1,14 +1,16 @@
 """Unit tests for TTL parsing and injection."""
 
+from pydantic_settings import BaseSettings
+
 from ttl_processor import TTLProcessor
 
 
-class DummySettings:  # pylint: disable=too-few-public-methods
+class DummySettings(BaseSettings):  # pylint: disable=too-few-public-methods
     """Simple settings container for TTL tests."""
 
     # pylint: disable=too-few-public-methods
-    default_ttl_seconds = 5
-    unload_ttl_seconds = 2
+    default_ttl_seconds: int = 5
+    unload_ttl_seconds: int = 2
 
 
 def test_ttl_parse_numeric() -> None:

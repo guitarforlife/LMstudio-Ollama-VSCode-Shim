@@ -22,7 +22,7 @@ from backend import (
 from backend_api import api as backend_api
 from deps import get_client, get_model_cache
 from state import logger, settings
-from utils.http import inject_ttl_if_missing
+from utils.model_selection import prepare_payload
 from utils.time import now
 
 router = APIRouter()
@@ -322,17 +322,15 @@ async def generate(
 ) -> Response:
     """Generate text from a prompt (Ollama-compatible)."""
     response_model = req.model or _ollama_model_name(req.model)
-    model = await backend_api.ensure_selected(client, model_cache, req.model)
-
     stop_value = req.stop if req.stop is not None else settings.default_stop
     payload: Dict[str, Any] = {
-        "model": model,
+        "model": req.model,
         "prompt": req.prompt,
         "temperature": req.temperature,
         "stop": stop_value,
         "stream": req.stream,
     }
-    payload = inject_ttl_if_missing(payload, req.keep_alive)
+    payload = await prepare_payload(client, model_cache, req.model, payload, req.keep_alive)
 
     if not payload["stream"]:
         r = await backend_api.post_openai_json(client, model_cache, "/completions", payload)
@@ -384,21 +382,19 @@ async def chat(
 ) -> Response:
     """Chat with a model using messages (Ollama-compatible)."""
     response_model = req.model or _ollama_model_name(req.model)
-    model = await backend_api.ensure_selected(client, model_cache, req.model)
-
     messages = _build_chat_messages(req)
     if req.system is None and settings.default_system_prompt:
         messages.insert(0, {"role": "system", "content": settings.default_system_prompt})
 
     payload: Dict[str, Any] = {
-        "model": model,
+        "model": req.model,
         "messages": messages,
         "temperature": req.temperature,
         "stream": req.stream,
         "tools": req.tools,
         "tool_choice": req.tool_choice,
     }
-    payload = inject_ttl_if_missing(payload, req.keep_alive)
+    payload = await prepare_payload(client, model_cache, req.model, payload, req.keep_alive)
 
     if not payload["stream"]:
         r = await backend_api.post_openai_json(client, model_cache, "/chat/completions", payload)
@@ -437,9 +433,8 @@ async def embeddings(
     model_cache=Depends(get_model_cache),
 ) -> Dict[str, Any]:
     """Generate embeddings for a prompt (Ollama-compatible)."""
-    model = await backend_api.ensure_selected(client, model_cache, req.model)
-    payload: Dict[str, Any] = {"model": model, "input": req.prompt}
-    payload = inject_ttl_if_missing(payload, req.keep_alive)
+    payload: Dict[str, Any] = {"model": req.model, "input": req.prompt}
+    payload = await prepare_payload(client, model_cache, req.model, payload, req.keep_alive)
 
     r = await backend_api.post_openai_json(client, model_cache, "/embeddings", payload)
     data = r["data"][0]["embedding"]

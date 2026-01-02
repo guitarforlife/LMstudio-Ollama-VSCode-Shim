@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Iterable, Optional
 
-import httpx
-
 from backend import (
     ModelCache,
     lm_models,
@@ -14,6 +12,7 @@ from backend import (
     preflight_lmstudio,
     stream_post_raw,
 )
+from utils.types import BackendLike
 
 
 class BackendAPI:
@@ -21,7 +20,7 @@ class BackendAPI:
 
     async def models(
         self,
-        client: httpx.AsyncClient,
+        client: BackendLike,
         model_cache: Optional[ModelCache],
     ) -> list[Dict[str, Any]]:
         """Fetch model metadata from the backend."""
@@ -29,7 +28,7 @@ class BackendAPI:
 
     async def ensure_selected(
         self,
-        client: httpx.AsyncClient,
+        client: BackendLike,
         model_cache: Optional[ModelCache],
         requested: str,
     ) -> str:
@@ -38,7 +37,7 @@ class BackendAPI:
 
     async def post_openai_json(
         self,
-        client: httpx.AsyncClient,
+        client: BackendLike,
         model_cache: Optional[ModelCache],
         path: str,
         payload: Dict[str, Any],
@@ -46,13 +45,13 @@ class BackendAPI:
         """Send a JSON payload to the OpenAI-compatible backend path."""
         return await post_openai_json(client, model_cache, path, payload)
 
-    async def preflight(self, client: httpx.AsyncClient) -> None:
+    async def preflight(self, client: BackendLike) -> None:
         """Check backend availability before streaming."""
         await preflight_lmstudio(client)
 
     def stream_post_raw(  # pylint: disable=too-many-arguments
         self,
-        client: httpx.AsyncClient,
+        client: BackendLike,
         url: str,
         payload: Dict[str, Any],
         *,

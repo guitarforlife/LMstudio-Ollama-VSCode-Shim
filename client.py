@@ -12,6 +12,7 @@ import httpx
 
 from config import Settings
 from logging_config import request_id_ctx
+from utils.types import BackendLike
 
 T = TypeVar("T")
 
@@ -71,7 +72,7 @@ async def _retry(
 
 
 async def request_json(
-    client: httpx.AsyncClient,
+    client: BackendLike,
     method: str,
     url: str,
     *,

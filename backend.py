@@ -13,6 +13,7 @@ import httpx
 from client import BackendError, BackendUnavailableError, RequestOptions, request_json
 from logging_config import request_id_ctx
 from state import LMSTUDIO_OPENAI_BASE, LMSTUDIO_REST_BASE, settings
+from utils.types import BackendLike
 from utils.time import now
 
 logger = logging.getLogger("lmstudio_shim")
@@ -103,7 +104,7 @@ class ModelSelector:  # pylint: disable=too-few-public-methods
         self._cache: Dict[str, str] = {}
 
     async def ensure_selected(
-        self, client: httpx.AsyncClient, model_cache: Optional[ModelCache], requested: str
+        self, client: BackendLike, model_cache: Optional[ModelCache], requested: str
     ) -> str:
         """Resolve and store the active model id for LM Studio requests."""
         if not requested:
@@ -154,7 +155,7 @@ def openai_stream_error(message: str) -> bytes:
 
 
 async def _stream_post_raw(
-    client: httpx.AsyncClient,
+    client: BackendLike,
     url: str,
     payload: Dict[str, Any],
     *,
@@ -215,7 +216,7 @@ async def _stream_post_raw(
             yield chunk
 
 
-async def preflight_lmstudio(client: httpx.AsyncClient) -> None:
+async def preflight_lmstudio(client: BackendLike) -> None:
     """Check LM Studio is reachable before streaming."""
     for url in (f"{LMSTUDIO_REST_BASE}/models", f"{LMSTUDIO_OPENAI_BASE}/models"):
         try:
@@ -250,7 +251,7 @@ async def preflight_lmstudio(client: httpx.AsyncClient) -> None:
 
 
 async def lm_models(
-    client: httpx.AsyncClient, model_cache: Optional[ModelCache] = None
+    client: BackendLike, model_cache: Optional[ModelCache] = None
 ) -> List[Dict[str, Any]]:
     """Retrieve model list from LM Studio."""
     if model_cache:
@@ -306,7 +307,7 @@ def _parse_model_payload(payload: Any) -> List[Dict[str, Any]]:
 
 
 async def _model_exists_and_state(
-    client: httpx.AsyncClient, model_cache: Optional[ModelCache], model: str
+    client: BackendLike, model_cache: Optional[ModelCache], model: str
 ) -> Tuple[bool, Optional[str]]:
     """Return (exists, state) if the model exists in the REST model list."""
     base = _ollama_model_name(model)
@@ -325,7 +326,7 @@ async def _model_exists_and_state(
 
 
 async def _resolve_model_id(
-    client: httpx.AsyncClient, model_cache: Optional[ModelCache], requested: str
+    client: BackendLike, model_cache: Optional[ModelCache], requested: str
 ) -> Tuple[str, Optional[Dict[str, Any]]]:
     """Resolve a requested model name to a known LM Studio model id if possible."""
     if not requested:
@@ -370,7 +371,7 @@ async def resolve_model_id(
 
 
 def stream_post_raw(
-    client: httpx.AsyncClient,
+    client: BackendLike,
     url: str,
     payload: Dict[str, Any],
     *,
@@ -388,7 +389,7 @@ def stream_post_raw(
 
 
 async def post_openai_json(
-    client: httpx.AsyncClient,
+    client: BackendLike,
     model_cache: Optional[ModelCache],
     path: str,
     payload: Dict[str, Any],

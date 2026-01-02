@@ -2,47 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Optional
 
-from state import settings as app_settings
-from ttl_processor import TTLProcessor
+import httpx
+from fastapi import HTTPException
 
-
-class TTLService:
-    """Service for injecting TTL into request payloads."""
-
-    def __init__(self, settings_provider) -> None:
-        self._settings_provider = settings_provider
-        self._processor: Optional[TTLProcessor] = None
-        self._settings: Optional[Any] = None
-
-    def _get_processor(self, settings: Optional[Any] = None) -> TTLProcessor:
-        resolved_settings = settings or self._settings_provider()
-        if self._processor is None or self._settings is not resolved_settings:
-            self._processor = TTLProcessor(resolved_settings)
-            self._settings = resolved_settings
-        return self._processor
-
-    def inject_ttl(
-        self,
-        payload: Dict[str, Any],
-        keep_alive: Optional[Any],
-        settings: Optional[Any] = None,
-    ) -> Dict[str, Any]:
-        """Return payload with TTL injected when applicable."""
-        if keep_alive is None and "ttl" in payload:
-            # Respect an explicit ttl provided by the client payload.
-            return dict(payload)
-        processor = self._get_processor(settings)
-        return processor.inject_ttl(payload, keep_alive=keep_alive)
-
-    def reset(self) -> None:
-        """Clear cached processor state (useful for tests)."""
-        self._processor = None
-        self._settings = None
-
-
-_ttl_service = TTLService(lambda: app_settings)
+from utils.ttl import inject_ttl
 
 
 def inject_ttl_if_missing(
@@ -51,4 +17,17 @@ def inject_ttl_if_missing(
     settings: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Prepare request body with TTL injection."""
-    return _ttl_service.inject_ttl(body, keep_alive, settings=settings)
+    return inject_ttl(body, keep_alive, settings=settings)
+
+
+def proxy_json(response: httpx.Response) -> Dict[str, Any]:
+    """Return JSON payload or raise HTTPException on backend errors."""
+    if response.is_error:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=response.text or "LMStudio error",
+        )
+    try:
+        return response.json()
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="LMStudio returned invalid JSON") from exc

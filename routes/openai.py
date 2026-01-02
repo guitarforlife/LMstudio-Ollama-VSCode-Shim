@@ -14,7 +14,7 @@ from backend import BackendClient, _extract_model_id, openai_stream_error
 from backend_api import api as backend_api
 from deps import get_client, get_model_cache
 from state import STREAM_CONTENT_TYPE, logger, settings
-from utils.http import inject_ttl_if_missing
+from utils.model_selection import prepare_payload
 
 router = APIRouter()
 
@@ -71,8 +71,7 @@ async def openai_chat(
     )
     body = req.model_dump(exclude_none=True)
 
-    body["model"] = await backend_api.ensure_selected(client, model_cache, req.model)
-    body = inject_ttl_if_missing(body, req.keep_alive)
+    body = await prepare_payload(client, model_cache, req.model, body, req.keep_alive)
     body.pop("keep_alive", None)
 
     if not body.get("stream", False):
@@ -126,8 +125,7 @@ async def openai_completions(
     if "stop" not in body and settings.default_stop is not None:
         body["stop"] = settings.default_stop
 
-    body["model"] = await backend_api.ensure_selected(client, model_cache, req.model)
-    body = inject_ttl_if_missing(body, req.keep_alive)
+    body = await prepare_payload(client, model_cache, req.model, body, req.keep_alive)
     body.pop("keep_alive", None)
 
     if not body.get("stream", False):

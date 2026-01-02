@@ -8,7 +8,6 @@ compatibility.
 from __future__ import annotations
 
 import asyncio
-import json
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, NoReturn, Optional, Tuple
 
@@ -30,6 +29,8 @@ from middleware import (
 )
 from routes import health_router, ollama_router, openai_router, version_router
 from utils.factory import coerce_client_factory
+from utils.http import proxy_json
+from utils.model_selection import raise_if_unloaded
 import state
 from state import LMSTUDIO_OPENAI_BASE, LMSTUDIO_REST_BASE, OLLAMA_VERSION, SHIM_VERSION, logger
 
@@ -62,6 +63,7 @@ async def _retry_request(
     *args: Any,
     retries: int = 0,
 ) -> httpx.Response:
+    """Retry a backend request on transient HTTP errors."""
     backoff = state.settings.request_retry_backoff
     for attempt in range(retries + 1):
         try:
@@ -89,53 +91,27 @@ async def _proxy_get(
     retries: int = 0,
 ) -> Dict[str, Any]:
     try:
-        response = await _retry_request(client.get, url, retries=retries)
+        response: httpx.Response = await _retry_request(client.get, url, retries=retries)
     except BackendUnavailableError as exc:
         _handle_backend_error(exc, url=url)
 
-    if response.is_error:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.text or "LMStudio error",
-        )
-    try:
-        return response.json()
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail="LMStudio returned invalid JSON") from exc
+    return proxy_json(response)
 
 
 async def _proxy_post_json(
     client: httpx.AsyncClient, url: str, payload: Dict[str, Any], retries: int = 0
 ) -> Dict[str, Any]:
     try:
-        response = await _retry_request(lambda: client.post(url, json=payload), retries=retries)
+        response: httpx.Response = await _retry_request(
+            lambda: client.post(url, json=payload),
+            retries=retries,
+        )
     except BackendUnavailableError as exc:
         _handle_backend_error(exc, url=url)
 
     if response.is_error:
-        model = ""
-        if response.status_code in (400, 404):
-            model = str(payload.get("model") or "")
-        if model:
-            exists, model_state = await _model_exists_and_state(client, model)
-            if exists and model_state and model_state.lower() in {"not-loaded", "unloaded"}:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        f"LM Studio reports model '{model}' is not loaded. "
-                        "Enable 'Just in Time Model Loading' in LM Studio Server Settings "
-                        "or manually load the model in LM Studio (or via `lms load`)."
-                    ),
-                )
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.text or "LMStudio error",
-        )
-
-    try:
-        return response.json()
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail="LMStudio returned invalid JSON") from exc
+        await raise_if_unloaded(client, None, payload, response)
+    return proxy_json(response)
 
 
 @asynccontextmanager
