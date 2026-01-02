@@ -4,6 +4,7 @@ import logging
 from contextvars import ContextVar
 
 request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
+logger = logging.getLogger("lmstudio_shim")
 
 
 def setup_logging(debug: bool) -> None:

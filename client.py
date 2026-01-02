@@ -1,26 +1,18 @@
-"""HTTP client factory and retry helpers for backend requests."""
+"""HTTP client factory and backend request helpers."""
 
 from __future__ import annotations
 
-import asyncio
 import json
-import logging
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Optional, TypeVar
+from typing import Any, Dict, Optional
 
 import httpx
 
 from config import Settings
-from logging_config import request_id_ctx
+from logging_config import logger, request_id_ctx
+from utils.retry import BackendUnavailableError, retry
 from utils.types import BackendLike
 
-T = TypeVar("T")
-
-logger = logging.getLogger("lmstudio_shim")
-
-
-class BackendUnavailableError(RuntimeError):
-    """Raised when backend retries are exhausted."""
 
 
 @dataclass
@@ -51,26 +43,6 @@ def default_client_factory(settings: Settings) -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=timeout, limits=limits, verify=settings.verify_ssl)
 
 
-async def _retry(
-    fn: Callable[..., Awaitable[T]],
-    *args: Any,
-    retries: int = 0,
-    backoff: float = 0.25,
-    **kwargs: Any,
-) -> T:
-    """Retry a backend operation on transient request errors with exponential backoff."""
-    for attempt in range(retries + 1):
-        try:
-            return await fn(*args, **kwargs)
-        except httpx.RequestError as exc:
-            if attempt >= retries:
-                raise BackendUnavailableError("LMStudio backend unavailable") from exc
-            delay = backoff * (2**attempt)
-            if delay:
-                await asyncio.sleep(delay)
-    raise BackendUnavailableError("LMStudio backend unavailable")
-
-
 async def request_json(
     client: BackendLike,
     method: str,
@@ -82,11 +54,8 @@ async def request_json(
     request_id = request_id_ctx.get("-")
     resolved = options or RequestOptions()
     try:
-        response = await _retry(
-            client.request,
-            method,
-            url,
-            json=resolved.payload,
+        response = await retry(
+            lambda: client.request(method, url, json=resolved.payload),
             retries=resolved.retries,
             backoff=resolved.backoff,
         )

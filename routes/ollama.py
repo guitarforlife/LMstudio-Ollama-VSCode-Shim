@@ -23,6 +23,7 @@ from backend_api import api as backend_api
 from deps import get_client, get_model_cache
 from state import logger, settings
 from utils.model_selection import prepare_payload
+from utils.pydantic import OllamaBaseModel
 from utils.time import now
 
 router = APIRouter()
@@ -292,7 +293,7 @@ async def show(req: ShowRequest) -> Response:
     )
 
 
-class GenerateRequest(BaseModel):  # pylint: disable=too-few-public-methods
+class GenerateRequest(OllamaBaseModel):  # pylint: disable=too-few-public-methods
     """Ollama-compatible generate request body."""
 
     model: str
@@ -301,8 +302,6 @@ class GenerateRequest(BaseModel):  # pylint: disable=too-few-public-methods
     stop: Optional[str] = None
     stream: bool = True
     keep_alive: Optional[Any] = None
-    model_config = ConfigDict(extra="allow")
-
 
 class GenerateResponse(BaseModel):  # pylint: disable=too-few-public-methods
     """Ollama-compatible generate response body."""
@@ -360,7 +359,7 @@ class ChatMessage(BaseModel):  # pylint: disable=too-few-public-methods
     content: str
 
 
-class ChatRequest(BaseModel):  # pylint: disable=too-few-public-methods
+class ChatRequest(OllamaBaseModel):  # pylint: disable=too-few-public-methods
     """Ollama-compatible chat request body."""
 
     model: str
@@ -371,8 +370,6 @@ class ChatRequest(BaseModel):  # pylint: disable=too-few-public-methods
     tools: Optional[List[Dict[str, Any]]] = None
     tool_choice: Optional[Dict[str, Any]] = None
     keep_alive: Optional[Any] = None
-    model_config = ConfigDict(extra="allow")
-
 
 @router.post("/api/chat")
 async def chat(
@@ -417,14 +414,12 @@ async def chat(
     )
 
 
-class EmbeddingsRequest(BaseModel):  # pylint: disable=too-few-public-methods
+class EmbeddingsRequest(OllamaBaseModel):  # pylint: disable=too-few-public-methods
     """Ollama-compatible embeddings request body."""
 
     model: str
     prompt: str
     keep_alive: Optional[Any] = None
-    model_config = ConfigDict(extra="allow")
-
 
 @router.post("/api/embeddings")
 async def embeddings(

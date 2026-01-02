@@ -4,19 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import time
 from typing import Any, AsyncGenerator, Callable, Dict, Iterable, List, Optional, Tuple
 
 import httpx
 
 from client import BackendError, BackendUnavailableError, RequestOptions, request_json
-from logging_config import request_id_ctx
+from constants import ERROR_MODEL_NOT_LOADED
+from logging_config import logger, request_id_ctx
 from state import LMSTUDIO_OPENAI_BASE, LMSTUDIO_REST_BASE, settings
 from utils.types import BackendLike
 from utils.time import now
 
-logger = logging.getLogger("lmstudio_shim")
 
 
 class ModelCache:
@@ -414,7 +413,7 @@ async def post_openai_json(
                 if exists and state and state.lower() in {"not-loaded", "unloaded"}:
                     raise BackendError(
                         status_code=409,
-                        error="model_not_loaded",
+                        error=ERROR_MODEL_NOT_LOADED,
                         detail=(
                             f"LM Studio reports model '{model}' is not loaded. "
                             "Enable 'Just in Time Model Loading' in LM Studio Server Settings "

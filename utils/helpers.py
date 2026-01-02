@@ -6,7 +6,7 @@ from typing import Any, AsyncGenerator, Dict, Iterable
 import httpx
 
 import backend
-from utils.http import inject_ttl_if_missing
+from utils.ttl import inject_ttl
 from utils.time import now
 
 
@@ -51,4 +51,4 @@ async def stream_from_backend(
         yield chunk
 
 
-__all__ = ["inject_ttl_if_missing", "stream_from_backend"]
+__all__ = ["inject_ttl", "stream_from_backend"]

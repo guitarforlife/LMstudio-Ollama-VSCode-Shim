@@ -8,6 +8,7 @@ from typing import Any, Optional, cast
 
 import pytest
 import httpx
+from fastapi import HTTPException
 from pydantic_settings import BaseSettings
 
 import backend
@@ -53,10 +54,10 @@ def test_ttl_processor_parsing_and_copy() -> None:
     assert "ttl" not in payload
 
 
-def test_inject_ttl_if_missing() -> None:
-    """Ensure inject_ttl_if_missing injects TTL without mutating input."""
+def test_inject_ttl_pure() -> None:
+    """Ensure inject_ttl injects TTL without mutating input."""
     payload = {"model": "foo"}
-    updated = helpers.inject_ttl_if_missing(payload, keep_alive="2m", settings=DummySettings())
+    updated = helpers.inject_ttl(payload, keep_alive="2m", settings=DummySettings())
     assert updated["ttl"] == 120
     assert "ttl" not in payload
 
@@ -80,7 +81,7 @@ async def test_proxy_get_retries_and_fails() -> None:
             """Raise a request error for every GET."""
             raise httpx.RequestError("boom", request=httpx.Request("GET", request_url))
 
-    with pytest.raises(main.HTTPException) as exc:
+    with pytest.raises(HTTPException) as exc:
         await main._proxy_get(cast(Any, FailingClient()), url, retries=1)
     assert exc.value.status_code == 502
 
@@ -111,7 +112,7 @@ async def test_proxy_post_unloaded_model_conflict(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(backend, "model_exists_and_state", fake_exists)
 
-    with pytest.raises(main.HTTPException) as exc:
+    with pytest.raises(HTTPException) as exc:
         await main._proxy_post_json(cast(Any, UnloadedClient()), url, {"model": "foo"}, retries=0)
     assert exc.value.status_code == 409
 
@@ -128,6 +129,6 @@ async def test_proxy_post_retries_and_fails() -> None:
             """Raise a request error for every POST."""
             raise httpx.RequestError("boom", request=httpx.Request("POST", request_url))
 
-    with pytest.raises(main.HTTPException) as exc:
+    with pytest.raises(HTTPException) as exc:
         await main._proxy_post_json(cast(Any, FailingClient()), url, {"model": "foo"}, retries=1)
     assert exc.value.status_code == 502

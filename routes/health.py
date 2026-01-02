@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
 from backend import BackendError, preflight_lmstudio
 from client import BackendUnavailableError
+from constants import ERROR_BACKEND_UNAVAILABLE
 from deps import get_client
 from state import OLLAMA_VERSION
 from utils.time import now
@@ -35,7 +36,7 @@ async def _preflight(client) -> None:
 
 def _backend_unavailable() -> JSONResponse:
     return JSONResponse(
-        {"error": "backend_unavailable", "detail": "LMStudio backend unavailable"},
+        {"error": ERROR_BACKEND_UNAVAILABLE, "detail": "LMStudio backend unavailable"},
         503,
     )
 

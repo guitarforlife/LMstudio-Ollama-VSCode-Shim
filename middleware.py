@@ -9,10 +9,8 @@ from uuid import uuid4
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
-from logging_config import request_id_ctx
+from logging_config import logger, request_id_ctx
 from state import settings
-
-logger = logging.getLogger("lmstudio_shim")
 
 AUTH_BEARER_PREFIX = "bearer "
 

@@ -6,7 +6,7 @@ import logging
 
 from config import Settings
 from constants import SHIM_VERSION as DEFAULT_SHIM_VERSION
-from logging_config import setup_logging
+from logging_config import logger, setup_logging
 
 try:
     from dotenv import load_dotenv
@@ -23,7 +23,6 @@ except ValueError as exc:
     raise
 
 setup_logging(settings.debug)
-logger = logging.getLogger("lmstudio_shim")
 
 logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
 logging.getLogger("httpx").setLevel(logging.DEBUG if settings.debug else logging.WARNING)

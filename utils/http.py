@@ -3,21 +3,15 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Literal
 
 import httpx
 from fastapi import HTTPException
 
-from utils.ttl import inject_ttl
-
-
-def inject_ttl_if_missing(
-    body: Dict[str, Any],
-    keep_alive: Optional[Any],
-    settings: Optional[Any] = None,
-) -> Dict[str, Any]:
-    """Prepare request body with TTL injection."""
-    return inject_ttl(body, keep_alive, settings=settings)
+from logging_config import logger
+from state import settings
+from utils.model_selection import raise_if_unloaded
+from utils.retry import BackendUnavailableError, retry
 
 
 def proxy_json(response: httpx.Response) -> Dict[str, Any]:
@@ -31,3 +25,36 @@ def proxy_json(response: httpx.Response) -> Dict[str, Any]:
         return response.json()
     except (json.JSONDecodeError, ValueError) as exc:
         raise HTTPException(status_code=502, detail="LMStudio returned invalid JSON") from exc
+
+
+async def proxy_request(
+    client: httpx.AsyncClient,
+    method: Literal["GET", "POST"],
+    url: str,
+    *,
+    json_body: Optional[Dict[str, Any]] = None,
+    retries: int = 0,
+) -> Dict[str, Any]:
+    """Perform a backend request with shared retry/error handling."""
+    try:
+        if method == "GET":
+            response = await retry(
+                client.get,
+                url,
+                retries=retries,
+                backoff=settings.request_retry_backoff,
+            )
+        else:
+            response = await retry(
+                lambda: client.post(url, json=json_body),
+                retries=retries,
+                backoff=settings.request_retry_backoff,
+            )
+    except BackendUnavailableError as exc:
+        detail = "LMStudio backend unavailable"
+        logger.error(detail, extra={"url": url}, exc_info=True)
+        raise HTTPException(status_code=502, detail=detail) from exc
+
+    if response.is_error and method == "POST" and json_body is not None:
+        await raise_if_unloaded(client, None, json_body, response)
+    return proxy_json(response)

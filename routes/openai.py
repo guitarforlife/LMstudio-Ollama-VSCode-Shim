@@ -8,18 +8,19 @@ from typing import Any, Dict, Iterable, List, Optional
 import httpx
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
 from backend import BackendClient, _extract_model_id, openai_stream_error
 from backend_api import api as backend_api
 from deps import get_client, get_model_cache
 from state import STREAM_CONTENT_TYPE, logger, settings
 from utils.model_selection import prepare_payload
+from utils.pydantic import OllamaBaseModel
 
 router = APIRouter()
 
 
-class ChatCompletionRequest(BaseModel):  # pylint: disable=too-few-public-methods
+class ChatCompletionRequest(OllamaBaseModel):  # pylint: disable=too-few-public-methods
     """OpenAI-compatible chat completion request body."""
 
     model: str
@@ -28,8 +29,6 @@ class ChatCompletionRequest(BaseModel):  # pylint: disable=too-few-public-method
     stream: bool = True
     ttl: Optional[int] = None
     keep_alive: Optional[Any] = None
-    model_config = ConfigDict(extra="allow")
-
 
 @router.get("/v1/models")
 async def openai_models(
@@ -101,7 +100,7 @@ async def openai_chat(
     )
 
 
-class CompletionRequest(BaseModel):  # pylint: disable=too-few-public-methods
+class CompletionRequest(OllamaBaseModel):  # pylint: disable=too-few-public-methods
     """OpenAI-compatible completion request body."""
 
     model: str
@@ -111,8 +110,6 @@ class CompletionRequest(BaseModel):  # pylint: disable=too-few-public-methods
     stream: bool = True
     ttl: Optional[int] = None
     keep_alive: Optional[Any] = None
-    model_config = ConfigDict(extra="allow")
-
 
 @router.post("/v1/completions")
 async def openai_completions(

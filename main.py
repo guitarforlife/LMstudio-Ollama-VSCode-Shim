@@ -9,15 +9,16 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, NoReturn, Optional, Tuple
+from typing import Any, AsyncGenerator, Callable, Dict, Optional, Tuple
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import backend
+from constants import ERROR_BACKEND_UNAVAILABLE
 from backend import BackendError, BackendUnavailableError, ModelCache
 from client import default_client_factory
 from deps import get_client
@@ -29,10 +30,10 @@ from middleware import (
 )
 from routes import health_router, ollama_router, openai_router, version_router
 from utils.factory import coerce_client_factory
-from utils.http import proxy_json
-from utils.model_selection import raise_if_unloaded
+from utils.http import proxy_request
 import state
-from state import LMSTUDIO_OPENAI_BASE, LMSTUDIO_REST_BASE, OLLAMA_VERSION, SHIM_VERSION, logger
+from logging_config import logger
+from state import LMSTUDIO_OPENAI_BASE, LMSTUDIO_REST_BASE, OLLAMA_VERSION, SHIM_VERSION
 
 settings = state.settings
 
@@ -58,60 +59,18 @@ async def _model_exists_and_state(
     return await backend.model_exists_and_state(client, None, model)
 
 
-async def _retry_request(
-    fn: Callable[..., Awaitable[httpx.Response]],
-    *args: Any,
-    retries: int = 0,
-) -> httpx.Response:
-    """Retry a backend request on transient HTTP errors."""
-    backoff = state.settings.request_retry_backoff
-    for attempt in range(retries + 1):
-        try:
-            return await fn(*args)
-        except httpx.RequestError as exc:
-            if attempt >= retries:
-                raise BackendUnavailableError("LMStudio backend unavailable") from exc
-            if backoff:
-                await asyncio.sleep(backoff)
-    raise BackendUnavailableError("LMStudio backend unavailable")
-
-
-def _handle_backend_error(exc: Exception, url: Optional[str] = None) -> NoReturn:
-    detail = "LMStudio backend unavailable"
-    extra = {}
-    if url:
-        extra["url"] = url
-    logger.error(detail, extra=extra, exc_info=True)
-    raise HTTPException(status_code=502, detail=detail) from exc
-
-
 async def _proxy_get(
     client: httpx.AsyncClient,
     url: str,
     retries: int = 0,
 ) -> Dict[str, Any]:
-    try:
-        response: httpx.Response = await _retry_request(client.get, url, retries=retries)
-    except BackendUnavailableError as exc:
-        _handle_backend_error(exc, url=url)
-
-    return proxy_json(response)
+    return await proxy_request(client, "GET", url, retries=retries)
 
 
 async def _proxy_post_json(
     client: httpx.AsyncClient, url: str, payload: Dict[str, Any], retries: int = 0
 ) -> Dict[str, Any]:
-    try:
-        response: httpx.Response = await _retry_request(
-            lambda: client.post(url, json=payload),
-            retries=retries,
-        )
-    except BackendUnavailableError as exc:
-        _handle_backend_error(exc, url=url)
-
-    if response.is_error:
-        await raise_if_unloaded(client, None, payload, response)
-    return proxy_json(response)
+    return await proxy_request(client, "POST", url, json_body=payload, retries=retries)
 
 
 @asynccontextmanager
@@ -195,7 +154,7 @@ async def backend_error_handler(_request, exc: BackendError) -> JSONResponse:
 async def backend_unavailable_handler(_request, exc: BackendUnavailableError) -> JSONResponse:
     """Return a consistent backend unavailable response."""
     return JSONResponse(
-        {"error": "backend_unavailable", "detail": str(exc)},
+        {"error": ERROR_BACKEND_UNAVAILABLE, "detail": str(exc)},
         status_code=503,
     )
 
