@@ -8,7 +8,7 @@ used in Visual Studio Code and Co-Pilot, with LM Studio (server) hosted models.
 
 I was working on my Mac over the holidays, testing out local LLM execution and use.
 I decided I wanted to use LM Studio mostly, due to the MLX models, but I could not
-make them work with Co-Pilot in VSCode.  Not liking other plugins solutions,
+make them work with Co-Pilot in VSCode.  Not liking other plugins or solutions,
 I built this.
 
 ## Quick start
