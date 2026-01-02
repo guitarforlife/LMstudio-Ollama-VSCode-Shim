@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Optional, Literal
+import logging
 
 import httpx
 from fastapi import HTTPException
 
-from logging_config import logger
 from state import settings
 from utils import json
 from utils.model_selection import raise_if_unloaded
 from utils.retry import BackendUnavailableError, retry
+
+logger = logging.getLogger(__name__)
 
 
 def proxy_json(response: httpx.Response) -> Dict[str, Any]:

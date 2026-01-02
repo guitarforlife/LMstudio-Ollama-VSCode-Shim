@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Any, Dict, Optional
 
 import httpx
 
 from config import Settings
-from logging_config import logger, request_id_ctx
+from logging_config import request_id_ctx
 from utils import json
 from utils.retry import BackendUnavailableError, retry
 from utils.types import BackendLike
+
+logger = logging.getLogger(__name__)
 
 
 

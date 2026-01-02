@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from state import OLLAMA_VERSION, SHIM_VERSION, logger
+from state import OLLAMA_VERSION, SHIM_VERSION
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 

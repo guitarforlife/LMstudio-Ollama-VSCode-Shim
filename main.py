@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 import multiprocessing
 import os
 import sys
@@ -37,13 +38,14 @@ from routes import health_router, ollama_router, openai_router, version_router
 from utils.factory import coerce_client_factory
 from utils.http import proxy_request
 import state
-from logging_config import logger
 from state import LMSTUDIO_OPENAI_BASE, LMSTUDIO_REST_BASE, OLLAMA_VERSION, SHIM_VERSION
 
 try:
     UVLOOP = importlib.import_module("uvloop")
 except ModuleNotFoundError:
     UVLOOP = None
+
+logger = logging.getLogger(__name__)
 
 _UVICORN_SUBPROCESS_ORIGINAL: Optional[Callable[..., None]] = None
 

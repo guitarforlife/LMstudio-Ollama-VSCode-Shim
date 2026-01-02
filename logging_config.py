@@ -5,7 +5,6 @@ import logging
 from contextvars import ContextVar
 
 request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
-logger = logging.getLogger("lmstudio_shim")
 
 
 class SuppressShutdownErrors(logging.Filter):  # pylint: disable=too-few-public-methods
@@ -41,5 +40,7 @@ def setup_logging(debug: bool) -> None:
     )
     if debug:
         logging.getLogger().setLevel(logging.DEBUG)
+    logging.getLogger("httpx").setLevel(logging.DEBUG if debug else logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     shutdown_filter = SuppressShutdownErrors()
     logging.getLogger("uvicorn.error").addFilter(shutdown_filter)

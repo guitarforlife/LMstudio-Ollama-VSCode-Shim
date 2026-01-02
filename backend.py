@@ -13,11 +13,13 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from client import BackendError, BackendUnavailableError, RequestOptions, request_json
 from constants import ERROR_MODEL_NOT_LOADED
-from logging_config import logger, request_id_ctx
+from logging_config import request_id_ctx
 from state import LMSTUDIO_OPENAI_BASE, LMSTUDIO_REST_BASE, settings
 from utils import json
 from utils.types import BackendLike
 from utils.time import now
+
+logger = logging.getLogger(__name__)
 
 
 
