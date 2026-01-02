@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
-from backend import BackendError, preflight_lmstudio
+from backend import BackendError
+from backend_api import api as backend_api
 from client import BackendUnavailableError
 from constants import ERROR_BACKEND_UNAVAILABLE
 from deps import get_client
@@ -30,8 +31,13 @@ except ImportError:  # pragma: no cover - optional dependency
     generate_latest = None
 
 
-async def _preflight(client) -> None:
-    await preflight_lmstudio(client)
+async def _backend_is_up(client, timeout: float) -> bool:
+    """Return True if the backend responds to a preflight request."""
+    try:
+        await asyncio.wait_for(backend_api.preflight(client), timeout=timeout)
+        return True
+    except (BackendError, BackendUnavailableError, asyncio.TimeoutError):
+        return False
 
 
 def _backend_unavailable() -> JSONResponse:
@@ -56,9 +62,8 @@ async def ping() -> JSONResponse:
 @router.get("/ready")
 async def ready(client=Depends(get_client)) -> JSONResponse:
     """Return readiness status after verifying LM Studio is reachable."""
-    try:
-        await asyncio.wait_for(_preflight(client), timeout=3.0)
-    except (BackendError, BackendUnavailableError, asyncio.TimeoutError):
+    ok = await _backend_is_up(client, timeout=3.0)
+    if not ok:
         return _backend_unavailable()
     return JSONResponse(
         {
@@ -73,11 +78,7 @@ async def ready(client=Depends(get_client)) -> JSONResponse:
 @router.get("/healthz")
 async def healthz(client=Depends(get_client)) -> JSONResponse:
     """Return a combined shim/backend health payload."""
-    backend_ok = True
-    try:
-        await asyncio.wait_for(_preflight(client), timeout=1.0)
-    except (BackendError, BackendUnavailableError, asyncio.TimeoutError):
-        backend_ok = False
+    backend_ok = await _backend_is_up(client, timeout=1.0)
     payload = {
         "shim": "ok",
         "backend": "ok" if backend_ok else "unavailable",
@@ -93,11 +94,6 @@ async def metrics(client=Depends(get_client)) -> Response:
     if PROMETHEUS_AVAILABLE and generate_latest is not None:
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
-    up = 0
-    try:
-        await asyncio.wait_for(_preflight(client), timeout=1.0)
-        up = 1
-    except (BackendError, BackendUnavailableError, asyncio.TimeoutError):
-        up = 0
+    up = 1 if await _backend_is_up(client, timeout=1.0) else 0
     body = f"shim_up {up}\nshim_version{{version=\"{OLLAMA_VERSION}\"}} 1\n"
     return PlainTextResponse(body)

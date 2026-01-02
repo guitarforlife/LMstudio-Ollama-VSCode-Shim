@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Callable, Dict, Optional, Tuple
+from typing import Any, AsyncGenerator, Callable, Optional
 
 import httpx
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -46,16 +46,16 @@ async def lm_models(client: httpx.AsyncClient) -> list[dict[str, Any]]:
 async def _resolve_model_id(
     client: httpx.AsyncClient,
     requested: str,
-) -> Tuple[str, Optional[Dict[str, Any]]]:
-    """Backward-compatible model resolution helper for tests."""
+) -> tuple[str, Optional[dict[str, Any]]]:
+    """Resolve a model identifier via the shim's public wrapper."""
     return await backend.resolve_model_id(client, None, requested)
 
 
 async def _model_exists_and_state(
     client: httpx.AsyncClient,
     model: str,
-) -> Tuple[bool, Optional[str]]:
-    """Backward-compatible model lookup helper for tests."""
+) -> tuple[bool, Optional[str]]:
+    """Check existence and state of a model."""
     return await backend.model_exists_and_state(client, None, model)
 
 
@@ -63,14 +63,39 @@ async def _proxy_get(
     client: httpx.AsyncClient,
     url: str,
     retries: int = 0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
+    """GET a JSON payload from the backend with retry handling."""
     return await proxy_request(client, "GET", url, retries=retries)
 
 
 async def _proxy_post_json(
-    client: httpx.AsyncClient, url: str, payload: Dict[str, Any], retries: int = 0
-) -> Dict[str, Any]:
+    client: httpx.AsyncClient, url: str, payload: dict[str, Any], retries: int = 0
+) -> dict[str, Any]:
+    """POST a JSON payload to the backend with retry handling."""
     return await proxy_request(client, "POST", url, json_body=payload, retries=retries)
+
+
+async def _init_client(
+    fastapi_app: FastAPI,
+    client_factory: Optional[Callable[[], httpx.AsyncClient]] = None,
+) -> httpx.AsyncClient:
+    """Create the shared HTTP client using the configured factory."""
+    client_factory_attr = getattr(fastapi_app.state, "client_factory", None)
+    resolved_factory = coerce_client_factory(
+        client_factory or client_factory_attr,
+        default_factory=lambda: default_client_factory(state.settings),
+        logger=logger,
+    )
+    return await resolved_factory()
+
+
+async def _close_client(client: httpx.AsyncClient) -> None:
+    """Gracefully close the client respecting the configured timeout."""
+    try:
+        timeout = state.settings.http_timeout or 5.0
+        await asyncio.wait_for(client.aclose(), timeout=timeout)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.exception("Error closing HTTP client")
 
 
 @asynccontextmanager
@@ -79,14 +104,8 @@ async def lifespan(
     client_factory: Optional[Callable[[], httpx.AsyncClient]] = None,
 ) -> AsyncGenerator[None, None]:
     """Manage startup and shutdown lifecycle for the FastAPI app."""
-    client_factory_attr = getattr(fastapi_app.state, "client_factory", None)
-    resolved_factory = coerce_client_factory(
-        client_factory or client_factory_attr,
-        default_factory=lambda: default_client_factory(state.settings),
-        logger=logger,
-    )
     try:
-        client = await resolved_factory()
+        client = await _init_client(fastapi_app, client_factory=client_factory)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.error("Failed to create HTTP client", exc_info=True)
         raise RuntimeError("Failed to start shim") from exc
@@ -108,55 +127,73 @@ async def lifespan(
     try:
         yield
     finally:
-        try:
-            timeout = state.settings.http_timeout
-            if timeout is None:
-                timeout = 5.0
-            await asyncio.wait_for(client.aclose(), timeout=timeout)
-        except Exception:  # pylint: disable=broad-exception-caught
-            logger.exception("Error closing HTTP client")
+        await _close_client(client)
 
 
-app = FastAPI(
-    title="Ollama to LM Studio Shim",
-    version=SHIM_VERSION,
-    lifespan=lifespan,
-)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=state.settings.allowed_origins,
-    allow_methods=["GET", "POST"],
-    allow_headers=["*"],
-    allow_credentials=False,
-)
+async def backend_error_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """Return a consistent backend error response.
 
-app.middleware("http")(request_size_limit_middleware)
-app.middleware("http")(request_id_middleware)
-app.middleware("http")(api_key_middleware)
-app.middleware("http")(prometheus_middleware)
-
-app.include_router(version_router)
-app.include_router(health_router)
-app.include_router(openai_router)
-app.include_router(ollama_router)
+    The FastAPI ``add_exception_handler`` expects a handler that accepts a generic
+    ``Exception``. We therefore accept ``exc`` as ``Exception`` and, if it is a
+    ``BackendError``, format the response accordingly. For any other exception type,
+    a generic error response is returned.
+    """
+    if isinstance(exc, BackendError):
+        return JSONResponse(
+            {"error": exc.error, "detail": exc.detail},
+            status_code=exc.status_code,
+        )
+    # Fallback for unexpected exception types
+    return JSONResponse({"error": "unknown_error", "detail": str(exc)}, status_code=500)
 
 
-@app.exception_handler(BackendError)
-async def backend_error_handler(_request, exc: BackendError) -> JSONResponse:
-    """Return a consistent backend error response."""
-    return JSONResponse(
-        {"error": exc.error, "detail": exc.detail},
-        status_code=exc.status_code,
+async def backend_unavailable_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """Return a consistent backend unavailable response.
+
+    ``exc`` is accepted as a generic ``Exception`` to satisfy FastAPI's type
+    expectations. If it is a ``BackendUnavailableError``, we format the response;
+    otherwise, a generic error response is returned.
+    """
+    if isinstance(exc, BackendUnavailableError):
+        return JSONResponse(
+            {"error": ERROR_BACKEND_UNAVAILABLE, "detail": str(exc)},
+            status_code=503,
+        )
+    return JSONResponse({"error": "unknown_error", "detail": str(exc)}, status_code=500)
+
+
+def create_app() -> FastAPI:
+    """Factory that builds the FastAPI instance with all routers & middleware."""
+    fastapi_app = FastAPI(
+        title="Ollama to LM Studio Shim",
+        version=SHIM_VERSION,
+        lifespan=lifespan,
+    )
+    fastapi_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=state.settings.allowed_origins,
+        allow_methods=["GET", "POST"],
+        allow_headers=["*"],
+        allow_credentials=False,
     )
 
+    fastapi_app.middleware("http")(request_size_limit_middleware)
+    fastapi_app.middleware("http")(request_id_middleware)
+    fastapi_app.middleware("http")(api_key_middleware)
+    fastapi_app.middleware("http")(prometheus_middleware)
 
-@app.exception_handler(BackendUnavailableError)
-async def backend_unavailable_handler(_request, exc: BackendUnavailableError) -> JSONResponse:
-    """Return a consistent backend unavailable response."""
-    return JSONResponse(
-        {"error": ERROR_BACKEND_UNAVAILABLE, "detail": str(exc)},
-        status_code=503,
-    )
+    fastapi_app.include_router(version_router)
+    fastapi_app.include_router(health_router)
+    fastapi_app.include_router(openai_router)
+    fastapi_app.include_router(ollama_router)
+
+    fastapi_app.add_exception_handler(BackendError, backend_error_handler)
+    fastapi_app.add_exception_handler(BackendUnavailableError, backend_unavailable_handler)
+
+    return fastapi_app
+
+
+app = create_app()
 
 
 def run() -> None:

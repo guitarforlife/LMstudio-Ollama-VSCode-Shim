@@ -12,6 +12,7 @@ class BackendLike(Protocol):
 
     async def get(self, url: str, *, timeout: float | None = None) -> httpx.Response:
         """Perform a GET request."""
+        raise NotImplementedError
 
     async def request(
         self,
@@ -21,6 +22,7 @@ class BackendLike(Protocol):
         json: Any | None = None,
     ) -> httpx.Response:
         """Perform a generic request."""
+        raise NotImplementedError
 
     def stream(
         self,
@@ -30,3 +32,4 @@ class BackendLike(Protocol):
         json: Any | None = None,
     ) -> AsyncContextManager[httpx.Response]:
         """Open a streaming response context."""
+        raise NotImplementedError

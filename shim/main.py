@@ -4,9 +4,9 @@ The implementation lives in `main.py`; this file is a thin wrapper that
 re-exports the same symbols for backward compatibility.
 """
 
-from main import app, run
+from main import app, create_app, run
 
-__all__ = ["app", "run"]
+__all__ = ["app", "create_app", "run"]
 
 if __name__ == "__main__":
     run()
