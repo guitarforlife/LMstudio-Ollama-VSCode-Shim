@@ -14,6 +14,7 @@ I built this.
 ## Quick start
 
 ```bash
+# Python 3.11.11 was used in development of this project
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -40,6 +41,7 @@ Environment variables:
 Configure environment and install dependencies:
 
 ```bash
+# Python 3.11.11 was used in development of this project
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
