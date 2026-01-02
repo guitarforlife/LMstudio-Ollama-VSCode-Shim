@@ -3,7 +3,7 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-import main
+import routes.health as health_routes
 from main import app, lifespan
 
 
@@ -13,7 +13,7 @@ async def test_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_preflight(_client):
         return None
 
-    monkeypatch.setattr(main, "_preflight_lmstudio", fake_preflight)
+    monkeypatch.setattr(health_routes, "preflight_lmstudio", fake_preflight)
     async with lifespan(app):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
