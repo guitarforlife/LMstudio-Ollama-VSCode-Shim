@@ -19,6 +19,7 @@ from backend import (
     post_openai_json,
     preflight_lmstudio,
 )
+from constants import DEFAULT_TEMPERATURE
 from deps import get_client, get_model_cache
 from state import STREAM_CONTENT_TYPE, logger
 from utils.http import prepare_body
@@ -31,7 +32,7 @@ class ChatCompletionRequest(BaseModel):  # pylint: disable=too-few-public-method
 
     model: str
     messages: List[Dict[str, Any]] = Field(default_factory=list)
-    temperature: float = 0.8
+    temperature: float = DEFAULT_TEMPERATURE
     stream: bool = True
     ttl: Optional[int] = None
     keep_alive: Optional[Any] = None
@@ -109,7 +110,7 @@ class CompletionRequest(BaseModel):  # pylint: disable=too-few-public-methods
 
     model: str
     prompt: Optional[Any] = None
-    temperature: float = 0.8
+    temperature: float = DEFAULT_TEMPERATURE
     stream: bool = True
     ttl: Optional[int] = None
     keep_alive: Optional[Any] = None

@@ -118,7 +118,10 @@ async def _proxy_post_json(
 
 
 def _coerce_client_factory(value: Any) -> Callable[[], httpx.AsyncClient]:
-    """Return a validated client factory or the default implementation."""
+    """Return a validated client factory or the default implementation.
+
+    Custom factories must return an ``httpx.AsyncClient`` instance.
+    """
     if not callable(value):
         def default_factory() -> httpx.AsyncClient:
             return default_client_factory(settings)
