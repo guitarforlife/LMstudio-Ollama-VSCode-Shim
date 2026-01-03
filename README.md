@@ -25,7 +25,7 @@ I built this.
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn main:app --reload --host 0.0.0.0 --port 11434
+python main.py
 ```
 
 OpenAPI docs are available at `http://localhost:11434/docs`.
@@ -71,12 +71,6 @@ pip install -r requirements.txt
 ```
 
 Then run:
-
-```bash
-uvicorn main:app --reload
-```
-
-Or run directly:
 
 ```bash
 python main.py
