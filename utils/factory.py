@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -14,7 +15,7 @@ def coerce_client_factory(
     factory: Any,
     *,
     default_factory: Callable[[], httpx.AsyncClient],
-    logger,
+    logger: logging.Logger,
 ) -> Callable[[], Awaitable[httpx.AsyncClient]]:
     """Validate or wrap a client factory.
 

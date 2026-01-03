@@ -56,7 +56,7 @@ def _suppress_spawned_process_interrupts() -> None:
     if multiprocessing.current_process().name == "MainProcess":
         return
 
-    def _hook(exc_type: type[BaseException], exc: BaseException, tb) -> None:
+    def _hook(exc_type: type[BaseException], exc: BaseException, tb: Any) -> None:
         if exc_type in (KeyboardInterrupt, asyncio.CancelledError):
             return
         sys.__excepthook__(exc_type, exc, tb)

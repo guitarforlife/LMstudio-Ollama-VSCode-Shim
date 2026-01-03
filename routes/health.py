@@ -5,15 +5,16 @@ from __future__ import annotations
 import asyncio
 from typing import Callable, Optional, TYPE_CHECKING
 
+import httpx
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
 from backend import BackendError
 from backend_api import api as backend_api
-from client import BackendUnavailableError
 from constants import ERROR_BACKEND_UNAVAILABLE
 from deps import get_client
 from state import OLLAMA_VERSION
+from utils.retry import BackendUnavailableError
 from utils.time import now
 
 router = APIRouter()
@@ -32,7 +33,7 @@ except ImportError:  # pragma: no cover - optional dependency
     GENERATE_LATEST = None
 
 
-async def _backend_is_up(client, timeout: float) -> bool:
+async def _backend_is_up(client: httpx.AsyncClient, timeout: float) -> bool:
     """Return True if the backend responds to a preflight request."""
     try:
         await asyncio.wait_for(backend_api.preflight(client), timeout=timeout)
@@ -61,7 +62,7 @@ async def ping() -> JSONResponse:
 
 
 @router.get("/ready")
-async def ready(client=Depends(get_client)) -> JSONResponse:
+async def ready(client: httpx.AsyncClient = Depends(get_client)) -> JSONResponse:
     """Return readiness status after verifying LM Studio is reachable."""
     ok = await _backend_is_up(client, timeout=3.0)
     if not ok:
@@ -77,7 +78,7 @@ async def ready(client=Depends(get_client)) -> JSONResponse:
 
 
 @router.get("/healthz")
-async def healthz(client=Depends(get_client)) -> JSONResponse:
+async def healthz(client: httpx.AsyncClient = Depends(get_client)) -> JSONResponse:
     """Return a combined shim/backend health payload."""
     backend_ok = await _backend_is_up(client, timeout=1.0)
     payload = {
@@ -90,7 +91,7 @@ async def healthz(client=Depends(get_client)) -> JSONResponse:
 
 
 @router.get("/metrics")
-async def metrics(client=Depends(get_client)) -> Response:
+async def metrics(client: httpx.AsyncClient = Depends(get_client)) -> Response:
     """Return Prometheus metrics when available."""
     if PROMETHEUS_AVAILABLE and GENERATE_LATEST is not None:
         return Response(GENERATE_LATEST(), media_type=CONTENT_TYPE_LATEST)

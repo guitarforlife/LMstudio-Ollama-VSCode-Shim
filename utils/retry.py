@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Awaitable, Callable, TypeVar
+from typing import Any, Awaitable, Callable, TypeVar
 
 import httpx
 
@@ -16,7 +16,7 @@ class BackendUnavailableError(RuntimeError):
 
 async def retry(
     fn: Callable[..., Awaitable[T]],
-    *args,
+    *args: Any,
     retries: int = 0,
     backoff: float = 0.25,
 ) -> T:

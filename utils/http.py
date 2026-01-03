@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Literal
+from typing import Any, Dict, Optional, Literal, cast
 import logging
 
 import httpx
@@ -24,7 +24,7 @@ def proxy_json(response: httpx.Response) -> Dict[str, Any]:
             detail=response.text or "LMStudio error",
         )
     try:
-        return response.json()
+        return cast(Dict[str, Any], response.json())
     except (json.JSONDecodeError, ValueError) as exc:
         raise HTTPException(status_code=502, detail="LMStudio returned invalid JSON") from exc
 

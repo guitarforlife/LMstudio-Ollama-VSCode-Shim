@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend import (
     BackendClient,
+    ModelCache,
     _entry_is_loaded,
     _extract_model_id,
     _ollama_model_name,
@@ -237,7 +238,7 @@ class TagResponse(BaseModel):  # pylint: disable=too-few-public-methods
 @router.get("/api/tags", response_model=TagResponse)
 async def tags(
     client: httpx.AsyncClient = Depends(get_client),
-    model_cache=Depends(get_model_cache),
+    model_cache: Optional[ModelCache] = Depends(get_model_cache),
 ) -> Dict[str, Any]:
     """Return Ollama-compatible tag list (models)."""
     models = await backend_api.models(client, model_cache)
@@ -328,7 +329,7 @@ async def generate(
     req: GenerateRequest,
     request: Request,
     client: httpx.AsyncClient = Depends(get_client),
-    model_cache=Depends(get_model_cache),
+    model_cache: Optional[ModelCache] = Depends(get_model_cache),
 ) -> Response:
     """Generate text from a prompt (Ollama-compatible)."""
     response_model = req.model or _ollama_model_name(req.model)
@@ -393,7 +394,7 @@ async def chat(
     req: ChatRequest,
     request: Request,
     client: httpx.AsyncClient = Depends(get_client),
-    model_cache=Depends(get_model_cache),
+    model_cache: Optional[ModelCache] = Depends(get_model_cache),
 ) -> Response:
     """Chat with a model using messages (Ollama-compatible)."""
     response_model = req.model or _ollama_model_name(req.model)
@@ -449,7 +450,7 @@ class EmbeddingsRequest(OllamaBaseModel):  # pylint: disable=too-few-public-meth
 async def embeddings(
     req: EmbeddingsRequest,
     client: httpx.AsyncClient = Depends(get_client),
-    model_cache=Depends(get_model_cache),
+    model_cache: Optional[ModelCache] = Depends(get_model_cache),
 ) -> Dict[str, Any]:
     """Generate embeddings for a prompt (Ollama-compatible)."""
     payload: Dict[str, Any] = {"model": req.model, "input": req.prompt}
@@ -463,7 +464,7 @@ async def embeddings(
 @router.get("/api/ps")
 async def ps(
     client: httpx.AsyncClient = Depends(get_client),
-    model_cache=Depends(get_model_cache),
+    model_cache: Optional[ModelCache] = Depends(get_model_cache),
 ) -> Dict[str, Any]:
     """Return best-effort process status (loaded models)."""
     models = await backend_api.models(client, model_cache)
@@ -507,7 +508,7 @@ class DeleteRequest(BaseModel):  # pylint: disable=too-few-public-methods
 async def delete(
     req: DeleteRequest,
     client: httpx.AsyncClient = Depends(get_client),
-    model_cache=Depends(get_model_cache),
+    model_cache: Optional[ModelCache] = Depends(get_model_cache),
 ) -> JSONResponse:
     """Best-effort delete/unload (maps to a short TTL request)."""
     unload_ttl = int(settings.unload_ttl_seconds or 0)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 from types import ModuleType
-from typing import Any, Callable, Optional, cast
+from typing import Any, Callable, Optional
 
 _orjson_module: Optional[ModuleType] = None
 _orjson_dumps: Optional[Callable[..., Any]] = None
@@ -32,8 +32,8 @@ else:
 if _orjson_module is not None:
     if not callable(_orjson_dumps) or not callable(_orjson_loads):
         raise ValueError("orjson.dumps/loads unavailable")
-    _orjson_dumps_fn = cast(Callable[..., bytes], _orjson_dumps)
-    _orjson_loads_fn = cast(Callable[..., Any], _orjson_loads)
+    _orjson_dumps_fn: Callable[..., bytes] = _orjson_dumps
+    _orjson_loads_fn: Callable[..., Any] = _orjson_loads
 
     def dumps(obj: Any, *, option: Optional[int] = None) -> str:
         """Serialize to JSON string with orjson."""

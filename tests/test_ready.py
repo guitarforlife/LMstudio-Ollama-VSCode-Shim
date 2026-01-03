@@ -12,10 +12,11 @@ from main import app, lifespan
 @pytest.mark.asyncio
 async def test_ready(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test the /ready endpoint returns status ok and includes timestamp."""
-    async def fake_preflight(_client):
+    async def fake_preflight(_client: Any) -> None:
         return None
 
-    monkeypatch.setattr(health_routes.backend_api, "preflight", fake_preflight)
+    health_backend = cast(Any, health_routes).backend_api
+    monkeypatch.setattr(health_backend, "preflight", fake_preflight)
     async with lifespan(app):
         transport = ASGITransport(app=cast(Any, app))
         async with AsyncClient(transport=transport, base_url="http://test") as client:

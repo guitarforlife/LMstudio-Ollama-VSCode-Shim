@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple, TypedDict
+from typing import Any, AsyncGenerator, Callable, Dict, Iterable, Optional, Tuple, TypedDict
 
 from backend import (
     ModelCache,
@@ -58,7 +58,7 @@ class BackendAPI:
         *,
         log_label: str,
         on_error: Callable[[str], Iterable[bytes]],
-    ):
+    ) -> AsyncGenerator[bytes, None]:
         """Stream a raw POST response from the backend."""
         options = _StreamOptions(log_label=log_label, on_error=on_error)
         return stream_post_raw(client, url, payload, **options)

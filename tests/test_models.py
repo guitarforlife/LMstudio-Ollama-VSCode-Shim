@@ -18,7 +18,11 @@ import main
 async def test_openai_models(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure /v1/models returns a normalized list."""
 
-    async def fake_models(_client, _model_cache=None, **_kwargs):  # type: ignore[override]
+    async def fake_models(
+        _client: Any,
+        _model_cache: Any | None = None,
+        **_kwargs: Any,
+    ) -> list[backend.ModelEntry]:
         return [backend.ModelEntry(id="model-a"), backend.ModelEntry(name="model-b")]
 
     monkeypatch.setattr(backend_api.api, "models", fake_models)
@@ -38,12 +42,15 @@ async def test_openai_models(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_generate_non_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure non-streaming generate maps to LM Studio."""
 
-    async def fake_select(_client, _cache, model: str) -> str:  # type: ignore[override]
+    async def fake_select(_client: Any, _cache: Any, model: str) -> str:
         return model
 
-    async def fake_post(  # type: ignore[override]
-        _client, _model_cache, _path: str, _payload: dict
-    ) -> dict:
+    async def fake_post(
+        _client: Any,
+        _model_cache: Any,
+        _path: str,
+        _payload: dict[str, Any],
+    ) -> dict[str, Any]:
         return {"choices": [{"text": "hello"}]}
 
     monkeypatch.setattr(backend_api.api, "ensure_selected", fake_select)
@@ -67,7 +74,7 @@ async def test_model_selector_caches_resolved_id(monkeypatch: pytest.MonkeyPatch
     """Ensure model selector caches resolved model ids."""
     calls = {"count": 0}
 
-    async def fake_resolve(_client, _cache, requested: str):  # type: ignore[override]
+    async def fake_resolve(_client: Any, _cache: Any, requested: str) -> tuple[str, None]:
         calls["count"] += 1
         return f"{requested}:resolved", None
 
