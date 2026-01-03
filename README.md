@@ -116,6 +116,6 @@ Shim Process Output
 
 ## TODO
 
-Increase test coverage
-Split out backend code for maintainability
-Update to a modern setup/config system with toml
+- Increase test coverage
+- Split out backend code for maintainability
+- Update to a modern setup/config system with toml
