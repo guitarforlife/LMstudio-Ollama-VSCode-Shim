@@ -123,6 +123,20 @@ MyPy:
 files=("${(@f)$(find . \( -path './.venv' -o -path './.venv/*' -o -path './.git' -o -path './.git/*' -o -path '*/__pycache__' -o -path '*/__pycache__/*' -o -path '*/.pytest_cache' -o -path '*/.pytest_cache/*' -o -path '*/.mypy_cache' -o -path '*/.mypy_cache/*' -o -path '*/.ruff_cache' -o -path '*/.ruff_cache/*' \) -prune -o -type f -name '*.py' -print)}"); mypy --strict "${files[@]}"
 ```
 
+## Docker
+
+To build the docker image:
+
+```bash
+docker build -t shim:latest .
+```
+
+To run the docker image:
+
+```bash
+docker run -p 11434:11434 -d shim:latest
+```
+
 ## Screenshots
 
 LM Studio Available Models
@@ -142,4 +156,3 @@ Shim Process Output
 - Increase test coverage
 - Split out backend code for maintainability
 - Update to a modern setup/config system with toml
-- Complete Docker implementation once I have fixed Docker on my laptop (OSX Tahoe update broke my docker, lol)
