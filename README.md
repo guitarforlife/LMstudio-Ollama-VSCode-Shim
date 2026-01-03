@@ -4,6 +4,8 @@ FastAPI server that exposes an Ollama-compatible API proxying requests to a
 running LM Studio instance, such that the Ollama Language Model extension can be
 used in Visual Studio Code and Co-Pilot, with LM Studio (server) hosted models.
 
+More details on the implementation can be seen at [DETAIL.md](DETAIL.md).
+
 ## Why?
 
 I was working on my Mac over the holidays, testing out local LLM execution and use.
@@ -111,3 +113,9 @@ Models appearing in VSCode Chat Window Model Selector
 
 Shim Process Output
 ![Shim Process Output](ProcessOutput.png)
+
+## TODO
+
+Increase test coverage
+Split out backend code for maintainability
+Update to a modern setup/config system with toml
