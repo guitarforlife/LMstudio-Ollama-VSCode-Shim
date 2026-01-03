@@ -88,10 +88,6 @@ python -m shim.main
 Point VS Code extensions that expect an Ollama server to this shim (default
 port `11434`). The shim forwards requests to LM Studio via `SHIM_LMSTUDIO_BASE`.
 
-## Example requests
-
-Sample curl payloads live in `docs/example_requests.md`.
-
 ## Tests
 
 Run the health check test:
@@ -119,3 +115,4 @@ Shim Process Output
 - Increase test coverage
 - Split out backend code for maintainability
 - Update to a modern setup/config system with toml
+- Complete Docker implementation once I have fixed Docker on my laptop (OSX Tahoe update broke my docker, lol)
