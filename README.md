@@ -13,6 +13,8 @@ I decided I wanted to use LM Studio mostly, due to the MLX models, but I could n
 make them work with Co-Pilot in VSCode.  Not liking other plugins or solutions,
 I built this.
 
+*Note - this program was created for my personal usage and needs, on a Macbook Pro (14-inch, Nov 2024) - Chip: Apple M4 Max, Ram: 128GB*
+
 ## Quick start
 
 ```bash
