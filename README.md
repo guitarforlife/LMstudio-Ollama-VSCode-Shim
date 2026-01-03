@@ -90,10 +90,35 @@ port `11434`). The shim forwards requests to LM Studio via `SHIM_LMSTUDIO_BASE`.
 
 ## Tests
 
-Run the health check test:
+To run all available tests:
 
 ```bash
 pytest
+```
+
+## Format, Lint, Type Check
+
+Ruff:
+
+```bash
+ruff check
+```
+
+PyLint:
+
+```bash
+pylint $(find . -type f -name '*.py' \
+  ! -path '*/__pycache__/*' \
+  ! -path '*/.pytest_cache/*' \
+  ! -path '*/.mypy_cache/*' \
+  ! -path '*/.ruff_cache/*' \
+  ! -path '*/.venv/*')
+```
+
+MyPy:
+
+```bash
+files=("${(@f)$(find . \( -path './.venv' -o -path './.venv/*' -o -path './.git' -o -path './.git/*' -o -path '*/__pycache__' -o -path '*/__pycache__/*' -o -path '*/.pytest_cache' -o -path '*/.pytest_cache/*' -o -path '*/.mypy_cache' -o -path '*/.mypy_cache/*' -o -path '*/.ruff_cache' -o -path '*/.ruff_cache/*' \) -prune -o -type f -name '*.py' -print)}"); mypy "${files[@]}"
 ```
 
 ## Screenshots
