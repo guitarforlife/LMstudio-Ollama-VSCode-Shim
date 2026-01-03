@@ -6,7 +6,7 @@ used in [Visual Studio Code](https://code.visualstudio.com) and [Co-Pilot](https
 
 More details on the implementation can be seen at [DETAIL.md](DETAIL.md).
 
-*Note - as this is an Ollama server compatible API, so this can also be used for other clients and tools, 
+*Note - as this is an Ollama server compatible API, this can also be used for other clients and tools, 
 like [Open-WebUI](https://openwebui.com).*
 
 ## Why?
