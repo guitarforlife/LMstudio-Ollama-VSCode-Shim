@@ -6,6 +6,9 @@ used in Visual Studio Code and Co-Pilot, with LM Studio (server) hosted models.
 
 More details on the implementation can be seen at [DETAIL.md](DETAIL.md).
 
+*Note - as this is an Ollama client, this can also be used for other tools, 
+like [Open-WebUI](https://openwebui.com).*
+
 ## Why?
 
 I was working on my Mac over the holidays, testing out local LLM execution and use.
@@ -150,6 +153,12 @@ Models appearing in VSCode Chat Window Model Selector
 
 Shim Process Output
 ![Shim Process Output](ProcessOutput.png)
+
+Open-WebUI Configuration
+![Open-WebUI Configuration](OpenWebUIConfiguration.png)
+
+Open-WebUI Model Selector
+![Open-WebUI Model Selector](OpenWebUISelector.png)
 
 ## TODO
 
