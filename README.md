@@ -2,12 +2,12 @@
 
 [FastAPI](https://github.com/fastapi/fastapi) server that exposes an [Ollama](https://ollama.com)-compatible API proxying requests to a
 running [LM Studio](https://lmstudio.ai) instance, such that the Ollama Language Model extension can be
-used in [Visual Studio Code](https://code.visualstudio.com) and [Co-Pilot](https://github.com/copilot), with LM Studio (server) hosted models.
+used in [Visual Studio Code](https://code.visualstudio.com) and [Co-Pilot](https://github.com/copilot), with LM Studio (server) hosted models - as seen [below](README.md#LM-Studio-Available-Models).
 
 More details on the implementation can be seen at [DETAIL.md](DETAIL.md).
 
 *Note - as this is an Ollama server compatible API, this can also be used for other clients and tools, 
-like [Open-WebUI](https://openwebui.com).*
+like [Open-WebUI](https://openwebui.com) - as seen [below](README.md#OpenWebUI-Configuration).*
 
 ## Why?
 
@@ -136,22 +136,22 @@ docker run -p 11434:11434 -d shim:latest
 
 ## Screenshots
 
-LM Studio Available Models
+### LM Studio Available Models
 ![LM Studio Available Models](pics/LMStudioModels.png)
 
-Models appearing in VSCode Language Model Selector
+### Models appearing in VSCode Language Model Selector
 ![Models appearing in VSCode Language Model Selector](pics/LanguageModelSelector.png)
 
-Models appearing in VSCode Chat Window Model Selector
+### Models appearing in VSCode Chat Window Model Selector
 ![Models appearing in VSCode Chat Window Model Selector](pics/ChatWindowSelector.png)
 
-Shim Process Output
+### Shim Process Output
 ![Shim Process Output](pics/ProcessOutput.png)
 
-Open-WebUI Configuration
+### OpenWebUI Configuration
 ![Open-WebUI Configuration](pics/OpenWebUISettings.png)
 
-Open-WebUI Model Selector
+### OpenWebUI Model Selector
 ![Open-WebUI Model Selector](pics/OpenWebUISelector.png)
 
 ## TODO
