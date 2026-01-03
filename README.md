@@ -1,8 +1,8 @@
 # LMStudio Ollama VSCode Shim
 
-FastAPI server that exposes an Ollama-compatible API proxying requests to a
-running LM Studio instance, such that the Ollama Language Model extension can be
-used in Visual Studio Code and Co-Pilot, with LM Studio (server) hosted models.
+[FastAPI](https://github.com/fastapi/fastapi) server that exposes an [Ollama](https://ollama.com)-compatible API proxying requests to a
+running [LM Studio](https://lmstudio.ai) instance, such that the Ollama Language Model extension can be
+used in [Visual Studio Code](https://code.visualstudio.com) and [Co-Pilot](https://github.com/copilot), with LM Studio (server) hosted models.
 
 More details on the implementation can be seen at [DETAIL.md](DETAIL.md).
 
@@ -12,7 +12,7 @@ like [Open-WebUI](https://openwebui.com).*
 ## Why?
 
 I was working on my Mac over the holidays, testing out local LLM execution and use.
-I decided I wanted to use LM Studio mostly, due to the MLX models, but I could not
+I decided I wanted to use LM Studio mostly, due to the [MLX](https://opensource.apple.com/projects/mlx/) models, but I could not
 make them work with Co-Pilot in VSCode.  Not liking other plugins or solutions,
 I built this.
 
