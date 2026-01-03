@@ -14,6 +14,7 @@ import multiprocessing
 import os
 import sys
 from contextlib import asynccontextmanager
+from types import ModuleType
 from typing import Any, AsyncGenerator, Callable, Optional, cast
 
 import httpx
@@ -41,7 +42,7 @@ import state
 from state import LMSTUDIO_OPENAI_BASE, LMSTUDIO_REST_BASE, OLLAMA_VERSION, SHIM_VERSION
 
 try:
-    UVLOOP = importlib.import_module("uvloop")
+    UVLOOP: Optional[ModuleType] = importlib.import_module("uvloop")
 except ModuleNotFoundError:
     UVLOOP = None
 

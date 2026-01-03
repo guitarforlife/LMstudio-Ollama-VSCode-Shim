@@ -34,6 +34,6 @@ def test_ttl_parse_unload() -> None:
 def test_ttl_inject_default() -> None:
     """Inject default TTL when keep_alive is not provided."""
     processor = TTLProcessor(DummySettings())
-    payload = {}
+    payload: dict[str, object] = {}
     updated = processor.inject_ttl(payload, keep_alive=None)
     assert updated["ttl"] == 5

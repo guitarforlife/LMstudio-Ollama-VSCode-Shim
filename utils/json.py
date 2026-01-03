@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import importlib
+from types import ModuleType
 from typing import Any, Callable, Optional, cast
 
-_orjson_dumps = None
-_orjson_loads = None
-JSON_DECODE_ERROR_FALLBACK = None
+_orjson_module: Optional[ModuleType] = None
+_orjson_dumps: Optional[Callable[..., Any]] = None
+_orjson_loads: Optional[Callable[..., Any]] = None
+JSONDecodeError: type[Exception] = ValueError
 _opt_serialize_numpy = 0
 
 try:
@@ -18,7 +20,7 @@ else:
     try:
         _orjson_dumps = getattr(_orjson_module, "dumps")
         _orjson_loads = getattr(_orjson_module, "loads")
-        JSON_DECODE_ERROR_FALLBACK = getattr(_orjson_module, "JSONDecodeError", ValueError)
+        JSONDecodeError = getattr(_orjson_module, "JSONDecodeError", ValueError)
         _opt_serialize_numpy = getattr(_orjson_module, "OPT_SERIALIZE_NUMPY", 0)
     except AttributeError:
         _orjson_module = None
@@ -32,8 +34,6 @@ if _orjson_module is not None:
         raise ValueError("orjson.dumps/loads unavailable")
     _orjson_dumps_fn = cast(Callable[..., bytes], _orjson_dumps)
     _orjson_loads_fn = cast(Callable[..., Any], _orjson_loads)
-
-    JSONDecodeError = JSON_DECODE_ERROR_FALLBACK or ValueError
 
     def dumps(obj: Any, *, option: Optional[int] = None) -> str:
         """Serialize to JSON string with orjson."""

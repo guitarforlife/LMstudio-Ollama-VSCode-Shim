@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple, TypedDict
 
 from backend import (
     ModelCache,
@@ -60,8 +60,13 @@ class BackendAPI:
         on_error: Callable[[str], Iterable[bytes]],
     ):
         """Stream a raw POST response from the backend."""
-        options = {"log_label": log_label, "on_error": on_error}
+        options = _StreamOptions(log_label=log_label, on_error=on_error)
         return stream_post_raw(client, url, payload, **options)
 
 
 api = BackendAPI()
+
+
+class _StreamOptions(TypedDict):
+    log_label: str
+    on_error: Callable[[str], Iterable[bytes]]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
@@ -22,13 +22,14 @@ if TYPE_CHECKING:
     pass
 
 try:
-    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest as _generate_latest
 
     PROMETHEUS_AVAILABLE = True
+    GENERATE_LATEST: Optional[Callable[..., bytes]] = _generate_latest
 except ImportError:  # pragma: no cover - optional dependency
     PROMETHEUS_AVAILABLE = False
     CONTENT_TYPE_LATEST = "text/plain"
-    generate_latest = None
+    GENERATE_LATEST = None
 
 
 async def _backend_is_up(client, timeout: float) -> bool:
@@ -91,8 +92,8 @@ async def healthz(client=Depends(get_client)) -> JSONResponse:
 @router.get("/metrics")
 async def metrics(client=Depends(get_client)) -> Response:
     """Return Prometheus metrics when available."""
-    if PROMETHEUS_AVAILABLE and generate_latest is not None:
-        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    if PROMETHEUS_AVAILABLE and GENERATE_LATEST is not None:
+        return Response(GENERATE_LATEST(), media_type=CONTENT_TYPE_LATEST)
 
     up = 1 if await _backend_is_up(client, timeout=1.0) else 0
     body = f"shim_up {up}\nshim_version{{version=\"{OLLAMA_VERSION}\"}} 1\n"

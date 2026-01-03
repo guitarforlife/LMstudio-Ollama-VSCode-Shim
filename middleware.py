@@ -24,27 +24,30 @@ else:
     CounterType = Any
     HistogramType = Any
 
+PromCounter: Optional[Callable[..., CounterType]]
+PromHistogram: Optional[Callable[..., HistogramType]]
 try:
-    from prometheus_client import Counter, Histogram
-
-    PROMETHEUS_AVAILABLE = True
+    from prometheus_client import Counter as _Counter
+    from prometheus_client import Histogram as _Histogram
+    PromCounter = _Counter  # pylint: disable=invalid-name
+    PromHistogram = _Histogram  # pylint: disable=invalid-name
 except ImportError:  # pragma: no cover - optional dependency
-    PROMETHEUS_AVAILABLE = False
-    Counter = None
-    Histogram = None
+    PromCounter = None  # pylint: disable=invalid-name
+    PromHistogram = None  # pylint: disable=invalid-name
+PROMETHEUS_AVAILABLE = PromCounter is not None and PromHistogram is not None
 
 
 request_count: Optional[CounterType] = None
 request_latency: Optional[HistogramType] = None
 
 if PROMETHEUS_AVAILABLE:
-    assert Counter is not None and Histogram is not None
-    request_count = Counter(
+    assert PromCounter is not None and PromHistogram is not None
+    request_count = PromCounter(
         "shim_requests_total",
         "Total HTTP requests",
         ["method", "path", "status"],
     )
-    request_latency = Histogram(
+    request_latency = PromHistogram(
         "shim_request_duration_seconds",
         "HTTP request latency in seconds",
         ["method", "path"],
