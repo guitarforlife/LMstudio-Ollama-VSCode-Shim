@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
+import logging
 from typing import Any, Dict, Optional
 
 import httpx
 
 from config import Settings
-from logging_config import logger, request_id_ctx
+from logging_config import request_id_ctx
+from utils import json
 from utils.retry import BackendUnavailableError, retry
 from utils.types import BackendLike
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -40,7 +43,14 @@ def default_client_factory(settings: Settings) -> httpx.AsyncClient:
         max_keepalive_connections=settings.max_keepalive_connections or None,
         max_connections=settings.max_connections or None,
     )
-    return httpx.AsyncClient(timeout=timeout, limits=limits, verify=settings.verify_ssl)
+    transport = httpx.AsyncHTTPTransport(retries=3, verify=settings.verify_ssl)
+    return httpx.AsyncClient(
+        timeout=timeout,
+        limits=limits,
+        verify=settings.verify_ssl,
+        http2=True,
+        transport=transport,
+    )
 
 
 async def request_json(

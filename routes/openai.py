@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import logging
 from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional
 
 import httpx
@@ -13,9 +14,11 @@ from pydantic import Field
 from backend import BackendClient, _extract_model_id, openai_stream_error
 from backend_api import api as backend_api
 from deps import get_client, get_model_cache
-from state import STREAM_CONTENT_TYPE, logger, settings
+from state import STREAM_CONTENT_TYPE, settings
 from utils.model_selection import prepare_payload
 from utils.pydantic import OllamaBaseModel
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -49,7 +52,7 @@ async def openai_models(
                 "id": model_id,
                 "object": "model",
                 "created": created,
-                "owned_by": entry.get("owned_by", "lmstudio"),
+                "owned_by": entry.owned_by or "lmstudio",
             }
         )
         seen.add(model_id)

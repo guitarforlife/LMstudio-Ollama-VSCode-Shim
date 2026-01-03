@@ -19,7 +19,13 @@ def main() -> None:
     if args.debug:
         os.environ["SHIM_DEBUG"] = "1"
 
-    uvicorn.run(app_main.app, host=args.host, port=args.port)
+    use_uvloop = app_main.install_uvloop()
+    uvicorn.run(
+        app_main.app,
+        host=args.host,
+        port=args.port,
+        loop="uvloop" if use_uvloop else "asyncio",
+    )
 
 
 if __name__ == "__main__":

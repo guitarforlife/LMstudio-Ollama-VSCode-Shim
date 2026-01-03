@@ -1,11 +1,11 @@
 """Utility functions for the LMStudio-Ollama VSCode Shim."""
 
-import json
 from typing import Any, AsyncGenerator, Dict, Iterable
 
 import httpx
 
 import backend
+from utils import json
 from utils.ttl import inject_ttl
 from utils.time import now
 
@@ -39,7 +39,7 @@ async def stream_from_backend(
             "done": True,
             "done_reason": "error",
         }
-        return [json.dumps(error_payload).encode() + b"\n"]
+        return [json.dumps_bytes(error_payload) + b"\n"]
 
     async for chunk in backend.stream_post_raw(
         client,

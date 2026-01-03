@@ -8,7 +8,13 @@ compatibility.
 from __future__ import annotations
 
 import asyncio
+import importlib
+import logging
+import multiprocessing
+import os
+import sys
 from contextlib import asynccontextmanager
+from types import ModuleType
 from typing import Any, AsyncGenerator, Callable, Optional, cast
 
 import httpx
@@ -33,10 +39,81 @@ from routes import health_router, ollama_router, openai_router, version_router
 from utils.factory import coerce_client_factory
 from utils.http import proxy_request
 import state
-from logging_config import logger
 from state import LMSTUDIO_OPENAI_BASE, LMSTUDIO_REST_BASE, OLLAMA_VERSION, SHIM_VERSION
 
-async def lm_models(client: httpx.AsyncClient) -> list[dict[str, Any]]:
+try:
+    UVLOOP: Optional[ModuleType] = importlib.import_module("uvloop")
+except ModuleNotFoundError:
+    UVLOOP = None
+
+logger = logging.getLogger(__name__)
+
+_UVICORN_SUBPROCESS_ORIGINAL: Optional[Callable[..., None]] = None
+
+
+def _suppress_spawned_process_interrupts() -> None:
+    """Suppress noisy shutdown tracebacks in spawned worker processes."""
+    if multiprocessing.current_process().name == "MainProcess":
+        return
+
+    def _hook(exc_type: type[BaseException], exc: BaseException, tb) -> None:
+        if exc_type in (KeyboardInterrupt, asyncio.CancelledError):
+            return
+        sys.__excepthook__(exc_type, exc, tb)
+
+    sys.excepthook = _hook
+
+
+_suppress_spawned_process_interrupts()
+
+
+def _wrapped_subprocess_started(*args: Any, **kwargs: Any) -> None:
+    """Invoke uvicorn subprocess entrypoint with shutdown suppression."""
+    try:
+        original = _UVICORN_SUBPROCESS_ORIGINAL
+        if original is None:
+            return
+        original(*args, **kwargs)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        return
+
+
+def _patch_uvicorn_subprocess() -> None:
+    """Wrap uvicorn subprocess entrypoint to suppress shutdown tracebacks."""
+    global _UVICORN_SUBPROCESS_ORIGINAL  # pylint: disable=global-statement
+    try:
+        uvicorn_subprocess = importlib.import_module("uvicorn._subprocess")
+    except ModuleNotFoundError:
+        return
+
+    original = getattr(uvicorn_subprocess, "subprocess_started", None)
+    if original is None or getattr(original, "_shim_wrapped", False):
+        return
+
+    _UVICORN_SUBPROCESS_ORIGINAL = original
+    setattr(_wrapped_subprocess_started, "_shim_wrapped", True)
+    setattr(uvicorn_subprocess, "subprocess_started", _wrapped_subprocess_started)
+
+
+_patch_uvicorn_subprocess()
+
+
+def install_uvloop() -> bool:
+    """Install uvloop if available for faster event loops."""
+    if UVLOOP is not None and not os.getenv("DISABLE_UVLOOP"):
+        try:
+            UVLOOP.install()
+            logger.info("uvloop enabled")
+            return True
+        except (RuntimeError, ValueError):
+            return False
+    try:
+        asyncio.get_event_loop_policy().set_event_loop(asyncio.new_event_loop())
+    except RuntimeError:
+        pass
+    return False
+
+async def lm_models(client: httpx.AsyncClient) -> tuple[backend.ModelEntry, ...]:
     """Backward-compatible model list helper for tests."""
     return await backend.lm_models(client, model_cache=None)
 
@@ -44,7 +121,7 @@ async def lm_models(client: httpx.AsyncClient) -> list[dict[str, Any]]:
 async def _resolve_model_id(
     client: httpx.AsyncClient,
     requested: str,
-) -> tuple[str, Optional[dict[str, Any]]]:
+) -> tuple[str, Optional[backend.ModelEntry]]:
     """Resolve a model identifier via the shim's public wrapper."""
     return await backend.resolve_model_id(client, None, requested)
 
@@ -115,11 +192,13 @@ async def lifespan(
         extra={"version": OLLAMA_VERSION},
     )
     logger.info(
-        "LM Studio OpenAI base",
+        "LM Studio OpenAI base: %s",
+        LMSTUDIO_OPENAI_BASE,
         extra={"base_url": LMSTUDIO_OPENAI_BASE},
     )
     logger.info(
-        "LM Studio REST base",
+        "LM Studio REST base: %s",
+        LMSTUDIO_REST_BASE,
         extra={"base_url": LMSTUDIO_REST_BASE},
     )
     try:
@@ -204,11 +283,20 @@ app = create_app()
 def run() -> None:
     """Start the Uvicorn server for the shim."""
     try:
+        use_uvloop = install_uvloop()
+        workers = state.settings.workers
+        if workers is None:
+            workers = 1
+        app_target: Any = app
+        if workers and workers > 1:
+            app_target = "main:app"
         uvicorn.run(
-            app,
+            app_target,
             host=state.settings.host,
             port=state.settings.port,
             timeout_graceful_shutdown=cast(int | None, 0.5),
+            workers=workers,
+            loop="uvloop" if use_uvloop else "asyncio",
         )
     except KeyboardInterrupt:
         pass

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple, TypedDict
 
 from backend import (
     ModelCache,
+    ModelEntry,
     lm_models,
     model_selector,
     post_openai_json,
@@ -22,7 +23,7 @@ class BackendAPI:
         self,
         client: BackendLike,
         model_cache: Optional[ModelCache],
-    ) -> list[Dict[str, Any]]:
+    ) -> Tuple[ModelEntry, ...]:
         """Fetch model metadata from the backend."""
         return await lm_models(client, model_cache=model_cache)
 
@@ -59,8 +60,13 @@ class BackendAPI:
         on_error: Callable[[str], Iterable[bytes]],
     ):
         """Stream a raw POST response from the backend."""
-        options = {"log_label": log_label, "on_error": on_error}
+        options = _StreamOptions(log_label=log_label, on_error=on_error)
         return stream_post_raw(client, url, payload, **options)
 
 
 api = BackendAPI()
+
+
+class _StreamOptions(TypedDict):
+    log_label: str
+    on_error: Callable[[str], Iterable[bytes]]
