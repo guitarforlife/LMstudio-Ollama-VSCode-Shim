@@ -41,7 +41,7 @@
 |------|--------|
 | `main.py` | FastAPI application factory, lifecycle management (`lifespan`), server start (`run`). |
 | `backend.py` | Model cache, model selector, streaming logic, error handling, LM Studio request helpers. |
-| `backend_api.py` | Public façade exposing async methods (`models`, `ensure_selected`, `post_openai_json`, `preflight`, `stream_post_raw`). |
+| `backend_api.py` | Public facade exposing async methods (`models`, `ensure_selected`, `post_openai_json`, `preflight`, `stream_post_raw`). |
 | `client.py` | Thin wrapper around `httpx.AsyncClient` with retry and timeout defaults. |
 | `routes/*.py` | FastAPI routers that map HTTP endpoints to the backend functions. |
 | `utils/*` | JSON helpers, request retry logic, type definitions (`BackendLike`). |
