@@ -137,22 +137,22 @@ docker run -p 11434:11434 -d shim:latest
 ## Screenshots
 
 LM Studio Available Models
-![LM Studio Available Models](LMStudioModels.png)
+![LM Studio Available Models](pics/LMStudioModels.png)
 
 Models appearing in VSCode Language Model Selector
-![Models appearing in VSCode Language Model Selector](LanguageModelSelector.png)
+![Models appearing in VSCode Language Model Selector](pics/LanguageModelSelector.png)
 
 Models appearing in VSCode Chat Window Model Selector
-![Models appearing in VSCode Chat Window Model Selector](ChatWindowSelector.png)
+![Models appearing in VSCode Chat Window Model Selector](pics/ChatWindowSelector.png)
 
 Shim Process Output
-![Shim Process Output](ProcessOutput.png)
+![Shim Process Output](pics/ProcessOutput.png)
 
 Open-WebUI Configuration
-![Open-WebUI Configuration](OpenWebUISettings.png)
+![Open-WebUI Configuration](pics/OpenWebUISettings.png)
 
 Open-WebUI Model Selector
-![Open-WebUI Model Selector](OpenWebUISelector.png)
+![Open-WebUI Model Selector](pics/OpenWebUISelector.png)
 
 ## TODO
 
