@@ -29,7 +29,11 @@ class DummySettings(BaseSettings):  # pylint: disable=too-few-public-methods
 async def test_resolve_model_id_matches_tagged_model(monkeypatch: pytest.MonkeyPatch) -> None:
     """Resolve tagged model names to known entries."""
 
-    async def fake_models(_client, _model_cache=None, **_kwargs):  # type: ignore[override]
+    async def fake_models(
+        _client: Any,
+        _model_cache: Any | None = None,
+        **_kwargs: Any,
+    ) -> list[backend.ModelEntry]:
         return [backend.ModelEntry(id="foo:latest"), backend.ModelEntry(name="bar")]
 
     monkeypatch.setattr(backend, "lm_models", fake_models)
@@ -77,7 +81,7 @@ async def test_proxy_get_retries_and_fails() -> None:
     class FailingClient:  # pylint: disable=too-few-public-methods
         """Fake client that always raises RequestError."""
 
-        async def get(self, request_url: str):  # type: ignore[override]
+        async def get(self, request_url: str) -> httpx.Response:
             """Raise a request error for every GET."""
             raise httpx.RequestError("boom", request=httpx.Request("GET", request_url))
 
@@ -94,12 +98,12 @@ async def test_proxy_post_unloaded_model_conflict(monkeypatch: pytest.MonkeyPatc
     class UnloadedClient:  # pylint: disable=too-few-public-methods
         """Fake client that returns a 404 for unloaded models."""
 
-        async def post(  # type: ignore[override]
+        async def post(
             self,
             request_url: str,
-            _json: Optional[dict] = None,
-            **_kwargs,
-        ):
+            _json: Optional[dict[str, Any]] = None,
+            **_kwargs: Any,
+        ) -> httpx.Response:
             """Return a 404 response to simulate unloaded model."""
             return httpx.Response(
                 404,
@@ -107,7 +111,7 @@ async def test_proxy_post_unloaded_model_conflict(monkeypatch: pytest.MonkeyPatc
                 request=httpx.Request("POST", request_url),
             )
 
-    async def fake_exists(_client, _cache, _model: str):  # type: ignore[override]
+    async def fake_exists(_client: Any, _cache: Any, _model: str) -> tuple[bool, str]:
         return True, "not-loaded"
 
     monkeypatch.setattr(backend, "model_exists_and_state", fake_exists)
@@ -125,7 +129,7 @@ async def test_proxy_post_retries_and_fails() -> None:
     class FailingClient:  # pylint: disable=too-few-public-methods
         """Fake client that always raises RequestError."""
 
-        async def post(self, request_url: str, **_kwargs):  # type: ignore[override]
+        async def post(self, request_url: str, **_kwargs: Any) -> httpx.Response:
             """Raise a request error for every POST."""
             raise httpx.RequestError("boom", request=httpx.Request("POST", request_url))
 

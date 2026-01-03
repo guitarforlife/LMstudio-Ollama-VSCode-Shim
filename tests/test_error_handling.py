@@ -25,7 +25,7 @@ async def test_proxy_request_post_error() -> None:
     class FailingClient:  # pylint: disable=too-few-public-methods
         """Fake client that always raises RequestError."""
 
-        async def post(  # type: ignore[override]
+        async def post(
             self,
             request_url: str,
             **_kwargs: Any,

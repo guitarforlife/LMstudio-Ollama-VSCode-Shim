@@ -81,14 +81,17 @@ async def test_openai_chat_stream(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.asyncio
 async def test_openai_chat_ttl_inject_keep_alive(monkeypatch: pytest.MonkeyPatch) -> None:
     """Inject keep_alive into ttl for OpenAI chat payloads."""
-    captured = {}
+    captured: dict[str, dict[str, Any]] = {}
 
-    async def fake_select(_client, _cache, model: str) -> str:  # type: ignore[override]
+    async def fake_select(_client: Any, _cache: Any, model: str) -> str:
         return model
 
-    async def fake_post(  # type: ignore[override]
-        _client, _model_cache, _path: str, payload: dict
-    ) -> dict:
+    async def fake_post(
+        _client: Any,
+        _model_cache: Any,
+        _path: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
         captured["payload"] = payload
         return {"choices": [{"message": {"content": "ok"}}]}
 
@@ -111,14 +114,17 @@ async def test_openai_chat_ttl_inject_keep_alive(monkeypatch: pytest.MonkeyPatch
 @pytest.mark.asyncio
 async def test_openai_chat_ttl_preserves_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
     """Preserve explicit TTL when provided by the client."""
-    captured = {}
+    captured: dict[str, dict[str, Any]] = {}
 
-    async def fake_select(_client, _cache, model: str) -> str:  # type: ignore[override]
+    async def fake_select(_client: Any, _cache: Any, model: str) -> str:
         return model
 
-    async def fake_post(  # type: ignore[override]
-        _client, _model_cache, _path: str, payload: dict
-    ) -> dict:
+    async def fake_post(
+        _client: Any,
+        _model_cache: Any,
+        _path: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
         captured["payload"] = payload
         return {"choices": [{"message": {"content": "ok"}}]}
 
@@ -141,7 +147,7 @@ async def test_openai_chat_ttl_preserves_explicit(monkeypatch: pytest.MonkeyPatc
 async def test_openai_models_backend_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     """Return 502 when backend model list is unavailable."""
 
-    async def fake_models(_client, model_cache=None):  # type: ignore[override]
+    async def fake_models(_client: Any, model_cache: Any | None = None) -> Any:
         raise BackendError(status_code=502, error="backend_error", detail="backend down")
 
     monkeypatch.setattr(backend_api.api, "models", fake_models)

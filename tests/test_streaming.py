@@ -2,7 +2,7 @@
 
 # pylint: disable=unused-argument
 
-from typing import Any, Optional
+from typing import Any, AsyncIterable, Iterable, Optional
 
 import pytest
 import httpx
@@ -19,7 +19,12 @@ class DummyStream:
     async def __aenter__(self) -> httpx.Response:
         return self._response
 
-    async def __aexit__(self, _exc_type, _exc, _tb) -> bool:
+    async def __aexit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _tb: Any,
+    ) -> bool:
         return False
 
 
@@ -38,7 +43,7 @@ class ResponseClient:  # pylint: disable=too-few-public-methods
         method: str,
         url: str,
         *,
-        json: Optional[dict] = None,
+        json: Optional[dict[str, Any]] = None,
     ) -> httpx.Response:
         """Return the stored response for request calls."""
         return self._response
@@ -60,7 +65,7 @@ class ErrorClient:  # pylint: disable=too-few-public-methods
         method: str,
         url: str,
         *,
-        json: Optional[dict] = None,
+        json: Optional[dict[str, Any]] = None,
     ) -> httpx.Response:
         """Raise a connection error to simulate backend failure."""
         raise httpx.ConnectError("boom", request=httpx.Request("POST", url))
@@ -70,7 +75,7 @@ class ErrorClient:  # pylint: disable=too-few-public-methods
         raise httpx.ConnectError("boom", request=httpx.Request("POST", url))
 
 
-async def _collect(stream) -> bytes:
+async def _collect(stream: AsyncIterable[bytes]) -> bytes:
     """Collect all stream chunks into a single bytes payload."""
     chunks = []
     async for chunk in stream:
@@ -85,7 +90,7 @@ async def test_stream_post_raw_http_status_error() -> None:
     response = httpx.Response(500, text="boom", request=httpx.Request("POST", url))
     client = ResponseClient(response)
 
-    def on_error(message: str):
+    def on_error(message: str) -> Iterable[bytes]:
         return [f"ERR:{message}".encode()]
 
     result = await _collect(
@@ -100,7 +105,7 @@ async def test_stream_post_raw_request_error() -> None:
     url = "http://example.test/completions"
     client = ErrorClient()
 
-    def on_error(message: str):
+    def on_error(message: str) -> Iterable[bytes]:
         return [f"ERR:{message}".encode()]
 
     result = await _collect(

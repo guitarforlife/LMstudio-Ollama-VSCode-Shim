@@ -73,7 +73,7 @@ class TTLProcessor:
 
         return None
 
-    def inject_ttl(self, payload: dict, keep_alive: Any = None) -> dict:
+    def inject_ttl(self, payload: dict[str, Any], keep_alive: Any = None) -> dict[str, Any]:
         """Return a copy of payload with ttl injected when appropriate.
 
         Args:

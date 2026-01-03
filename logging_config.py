@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from contextvars import ContextVar
+from typing import Any
 
 request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
 
@@ -28,7 +29,7 @@ def setup_logging(debug: bool) -> None:
     """Configure root logging with request-id support."""
     record_factory = logging.getLogRecordFactory()
 
-    def _with_request_id(*args, **kwargs) -> logging.LogRecord:
+    def _with_request_id(*args: Any, **kwargs: Any) -> logging.LogRecord:
         record = record_factory(*args, **kwargs)
         record.request_id = request_id_ctx.get("-")
         return record

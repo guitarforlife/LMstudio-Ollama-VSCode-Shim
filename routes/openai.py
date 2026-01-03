@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import Field
 
-from backend import BackendClient, _extract_model_id, openai_stream_error
+from backend import BackendClient, ModelCache, _extract_model_id, openai_stream_error
 from backend_api import api as backend_api
 from deps import get_client, get_model_cache
 from state import STREAM_CONTENT_TYPE, settings
@@ -36,7 +36,7 @@ class ChatCompletionRequest(OllamaBaseModel):  # pylint: disable=too-few-public-
 @router.get("/v1/models")
 async def openai_models(
     client: httpx.AsyncClient = Depends(get_client),
-    model_cache=Depends(get_model_cache),
+    model_cache: Optional[ModelCache] = Depends(get_model_cache),
 ) -> Dict[str, Any]:
     """Return OpenAI-compatible model list."""
     models = await backend_api.models(client, model_cache)
@@ -65,7 +65,7 @@ async def openai_chat(
     req: ChatCompletionRequest,
     request: Request,
     client: httpx.AsyncClient = Depends(get_client),
-    model_cache=Depends(get_model_cache),
+    model_cache: Optional[ModelCache] = Depends(get_model_cache),
 ) -> Response:
     """OpenAI-compatible chat completions endpoint (streaming supported)."""
     logger.debug(
@@ -123,7 +123,7 @@ async def openai_completions(
     req: CompletionRequest,
     request: Request,
     client: httpx.AsyncClient = Depends(get_client),
-    model_cache=Depends(get_model_cache),
+    model_cache: Optional[ModelCache] = Depends(get_model_cache),
 ) -> Response:
     """OpenAI-compatible text completions endpoint (streaming supported)."""
     body = req.model_dump(exclude_none=True)

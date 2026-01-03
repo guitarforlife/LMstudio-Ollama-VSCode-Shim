@@ -120,7 +120,7 @@ pylint $(find . -type f -name '*.py' \
 MyPy:
 
 ```bash
-files=("${(@f)$(find . \( -path './.venv' -o -path './.venv/*' -o -path './.git' -o -path './.git/*' -o -path '*/__pycache__' -o -path '*/__pycache__/*' -o -path '*/.pytest_cache' -o -path '*/.pytest_cache/*' -o -path '*/.mypy_cache' -o -path '*/.mypy_cache/*' -o -path '*/.ruff_cache' -o -path '*/.ruff_cache/*' \) -prune -o -type f -name '*.py' -print)}"); mypy "${files[@]}"
+files=("${(@f)$(find . \( -path './.venv' -o -path './.venv/*' -o -path './.git' -o -path './.git/*' -o -path '*/__pycache__' -o -path '*/__pycache__/*' -o -path '*/.pytest_cache' -o -path '*/.pytest_cache/*' -o -path '*/.mypy_cache' -o -path '*/.mypy_cache/*' -o -path '*/.ruff_cache' -o -path '*/.ruff_cache/*' \) -prune -o -type f -name '*.py' -print)}"); mypy --strict "${files[@]}"
 ```
 
 ## Screenshots

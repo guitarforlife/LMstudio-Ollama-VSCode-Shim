@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 import httpx
 
@@ -94,7 +94,7 @@ async def request_json(
         )
 
     try:
-        return response.json()
+        return cast(Dict[str, Any], response.json())
     except (json.JSONDecodeError, ValueError) as exc:
         logger.error(
             "Backend returned invalid JSON",
