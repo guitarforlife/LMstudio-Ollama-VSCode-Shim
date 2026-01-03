@@ -155,7 +155,7 @@ Shim Process Output
 ![Shim Process Output](ProcessOutput.png)
 
 Open-WebUI Configuration
-![Open-WebUI Configuration](OpenWebUIConfiguration.png)
+![Open-WebUI Configuration](OpenWebUISettings.png)
 
 Open-WebUI Model Selector
 ![Open-WebUI Model Selector](OpenWebUISelector.png)
