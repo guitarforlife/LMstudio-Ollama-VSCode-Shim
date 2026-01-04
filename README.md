@@ -140,7 +140,7 @@ docker run -p 11434:11434 -d shim:latest
 ![LM Studio Available Models](pics/LMStudioModels.png)
 
 ### Models appearing in VSCode Language Model Selector
-![Models appearing in VSCode Language Model Selector](pics/LanguageModelSelector.png)
+![Models appearing in VSCode Language Model Selector](pics/ContextSizeInSelector.png)
 
 ### Models appearing in VSCode Chat Window Model Selector
 ![Models appearing in VSCode Chat Window Model Selector](pics/ChatWindowSelector.png)
