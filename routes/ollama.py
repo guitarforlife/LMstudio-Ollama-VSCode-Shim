@@ -110,6 +110,7 @@ async def _generate_stream(
     payload: Dict[str, Any],
     response_model: str,
     shutdown_event: asyncio.Event,
+    request: Request,
 ) -> AsyncGenerator[str, None]:
     """Stream generate responses as NDJSON."""
     buffer = b""
@@ -124,6 +125,10 @@ async def _generate_stream(
         log_label="generate",
         on_error=on_error,
     ):
+        # Abort if client disconnects (e.g., user pressed Stop)
+        if await request.is_disconnected():
+            logger.debug("Client disconnected – aborting generate stream")
+            return
         if shutdown_event.is_set():
             return
         buffer += chunk
@@ -169,6 +174,7 @@ async def _chat_stream(
     payload: Dict[str, Any],
     response_model: str,
     shutdown_event: asyncio.Event,
+    request: Request,
 ) -> AsyncGenerator[str, None]:
     """Stream chat responses as NDJSON."""
     buffer = b""
@@ -184,6 +190,10 @@ async def _chat_stream(
         log_label="chat",
         on_error=on_error,
     ):
+        # Abort if client disconnects (e.g., user pressed Stop)
+        if await request.is_disconnected():
+            logger.debug("Client disconnected – aborting chat stream")
+            return
         if shutdown_event.is_set():
             return
         buffer += chunk
@@ -365,6 +375,7 @@ async def generate(
             payload,
             response_model,
             request.app.state.shutdown_event,
+            request,
         ),
         media_type="application/x-ndjson",
     )
@@ -434,6 +445,7 @@ async def chat(
             payload,
             response_model,
             request.app.state.shutdown_event,
+            request,
         ),
         media_type="application/x-ndjson",
     )
