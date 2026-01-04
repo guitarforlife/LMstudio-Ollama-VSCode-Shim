@@ -250,6 +250,10 @@ def create_app() -> FastAPI:
         title="Ollama to LM Studio Shim",
         version=SHIM_VERSION,
         lifespan=lifespan,
+        swagger_ui_parameters={
+            "operationsSorter": "alpha",
+            "tagsSorter": "alpha",
+        },
     )
     fastapi_app.state.shutdown_event = asyncio.Event()
     fastapi_app.add_middleware(
