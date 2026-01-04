@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     ollama_version: str = DEFAULT_OLLAMA_VERSION
     http_timeout: Optional[float] = 300.0
     debug: bool = False
+    disable_uvloop: bool = False
     allowed_origins: List[str] = Field(
         default_factory=lambda: ["http://localhost", "http://127.0.0.1"]
     )
@@ -114,9 +115,9 @@ class Settings(BaseSettings):
             raise ValueError("HTTP_TIMEOUT must be >= 0.1 or 0 for no limit")
         return parsed
 
-    @field_validator("debug", mode="before")
+    @field_validator("debug", "disable_uvloop", mode="before")
     @classmethod
-    def _parse_debug(cls, value: Any) -> bool:
+    def _parse_bool(cls, value: Any) -> bool:
         if isinstance(value, bool):
             return value
         if value is None:

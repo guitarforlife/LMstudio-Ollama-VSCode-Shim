@@ -11,7 +11,6 @@ import asyncio
 import importlib
 import logging
 import multiprocessing
-import os
 import sys
 from contextlib import asynccontextmanager
 from types import ModuleType
@@ -100,7 +99,7 @@ _patch_uvicorn_subprocess()
 
 def install_uvloop() -> bool:
     """Install uvloop if available for faster event loops."""
-    if UVLOOP is not None and not os.getenv("DISABLE_UVLOOP"):
+    if UVLOOP is not None and not state.settings.disable_uvloop:
         try:
             UVLOOP.install()
             logger.info("uvloop enabled")
@@ -188,7 +187,8 @@ async def lifespan(
     fastapi_app.state.client = client
     fastapi_app.state.model_cache = ModelCache(state.settings.model_cache_ttl_seconds)
     logger.info(
-        "Shim started",
+        "Shim started (Ollama %s)",
+        OLLAMA_VERSION,
         extra={"version": OLLAMA_VERSION},
     )
     logger.info(

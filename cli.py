@@ -1,11 +1,11 @@
 """CLI entrypoint for running the LM Studio shim."""
 
 import argparse
-import os
-
 import uvicorn
 
 import main as app_main
+import state
+from logging_config import setup_logging
 
 
 def main() -> None:
@@ -17,7 +17,8 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.debug:
-        os.environ["SHIM_DEBUG"] = "1"
+        state.settings.debug = True
+        setup_logging(True)
 
     use_uvloop = app_main.install_uvloop()
     uvicorn.run(

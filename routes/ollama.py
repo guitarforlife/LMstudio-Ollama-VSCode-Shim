@@ -104,7 +104,7 @@ def _chat_from_payload(
     )
 
 
-async def _generate_stream(
+async def _generate_stream(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     client: httpx.AsyncClient,
     backend_client: BackendClient,
     payload: Dict[str, Any],
@@ -168,7 +168,7 @@ def _build_chat_messages(req: "ChatRequest") -> List[Dict[str, Any]]:
     return messages
 
 
-async def _chat_stream(
+async def _chat_stream(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     client: httpx.AsyncClient,
     backend_client: BackendClient,
     payload: Dict[str, Any],
