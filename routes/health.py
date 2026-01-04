@@ -55,6 +55,12 @@ async def health() -> JSONResponse:
     return JSONResponse({"status": "ok", "service": "shim", "timestamp": now()})
 
 
+@router.head("/")
+async def root_head() -> Response:
+    """Answer Ollama's root HEAD probe."""
+    return Response(status_code=200)
+
+
 @router.get("/ping")
 async def ping() -> JSONResponse:
     """Return a basic liveness response without backend checks."""

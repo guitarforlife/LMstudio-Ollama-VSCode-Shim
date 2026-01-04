@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import re
 from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Depends, Request
@@ -13,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend import (
     BackendClient,
+    ModelEntry,
     ModelCache,
     _entry_is_loaded,
     _extract_model_id,
@@ -22,6 +26,7 @@ from backend import (
     ollama_error,
 )
 from backend_api import api as backend_api
+from client import BackendError, RequestOptions, request_json
 from deps import get_client, get_model_cache
 from state import settings
 from utils import json
@@ -102,6 +107,151 @@ def _chat_from_payload(
         + "\n",
         role_sent,
     )
+
+
+_SIZE_RE = re.compile(
+    r"^(?P<value>\\d+(?:\\.\\d+)?)\\s*(?P<unit>[KMGTP]?B)?$",
+    re.IGNORECASE,
+)
+
+
+def _coerce_size_bytes(  # pylint: disable=too-many-return-statements
+    value: Any,
+) -> Optional[int]:
+    """Best-effort parse of size values into bytes."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return int(text)
+        match = _SIZE_RE.match(text)
+        if not match:
+            return None
+        number = float(match.group("value"))
+        unit = (match.group("unit") or "B").upper()
+        scale = {
+            "B": 1,
+            "KB": 1024,
+            "MB": 1024**2,
+            "GB": 1024**3,
+            "TB": 1024**4,
+            "PB": 1024**5,
+        }.get(unit)
+        if scale is None:
+            return None
+        return int(number * scale)
+    return None
+
+
+def _coerce_int(value: Any) -> Optional[int]:  # pylint: disable=too-many-return-statements
+    """Coerce basic numeric types and strings to int."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return int(text)
+    return None
+
+
+def _extract_context_length(*sources: Optional[Dict[str, Any]]) -> Optional[int]:
+    """Extract a context length from available payloads."""
+    for source in sources:
+        if not source:
+            continue
+        for key in ("context_length", "max_context_length", "loaded_context_length"):
+            parsed = _coerce_int(source.get(key))
+            if parsed is not None and parsed > 0:
+                return parsed
+    return None
+
+
+def _normalize_family_key(value: Any) -> Optional[str]:
+    """Normalize a family/arch label into a model_info prefix."""
+    if not isinstance(value, str):
+        return None
+    slug = re.sub(r"[^a-z0-9]", "", value.lower())
+    return slug or None
+
+
+def _extract_size_from_details(details: Optional[Dict[str, Any]]) -> int:
+    """Find a non-zero size in common LM Studio fields."""
+    details = details or {}
+    for value in (
+        details.get("size"),
+        details.get("size_bytes"),
+        details.get("bytes"),
+        details.get("model_size"),
+        details.get("file_size"),
+    ):
+        parsed = _coerce_size_bytes(value)
+        if parsed is not None and parsed > 0:
+            return parsed
+    return 0
+
+
+def _extract_size_bytes(entry: ModelEntry, details: Optional[Dict[str, Any]]) -> int:
+    """Find a non-zero size in model entry fields and details."""
+    parsed = _coerce_size_bytes(entry.size)
+    if parsed is not None and parsed > 0:
+        return parsed
+    return _extract_size_from_details(details)
+
+
+async def _fetch_model_details(
+    client: httpx.AsyncClient,
+    backend_client: BackendClient,
+    model_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Fetch per-model metadata from the REST API."""
+    if not model_id:
+        return None
+    safe_id = quote(model_id, safe="")
+    url = backend_client.rest_url(f"/models/{safe_id}")
+    try:
+        return await request_json(
+            client,
+            "GET",
+            url,
+            options=RequestOptions(
+                retries=settings.request_retries,
+                backoff=settings.request_retry_backoff,
+            ),
+        )
+    except BackendError as exc:
+        if exc.status_code == 404:
+            return None
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+    return None
+
+
+def _build_details_payload(entry: Optional[ModelEntry]) -> Dict[str, Any]:
+    """Build a details payload from the model entry."""
+    if entry is None:
+        return {}
+    details = entry.details or entry.model_dump(exclude_none=True, exclude={"details"})
+    model_id = _extract_model_id(entry)
+    if model_id:
+        details.setdefault("family", model_id)
+    if entry.state is not None:
+        details.setdefault("state", entry.state)
+    return details
 
 
 async def _generate_stream(  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -252,20 +402,29 @@ async def tags(
 ) -> Dict[str, Any]:
     """Return Ollama-compatible tag list (models)."""
     models = await backend_api.models(client, model_cache)
+    backend_client = BackendClient(client, model_cache)
     tags_list = []
     for entry in models:
         model_id = _extract_model_id(entry)
         if not model_id:
             continue
         name = model_id if ":" in model_id else f"{model_id}:latest"
-        details = entry.details or {"family": model_id, "state": entry.state}
+        details = _build_details_payload(entry)
+        size = _extract_size_bytes(entry, details)
+        if size == 0:
+            details_payload = await _fetch_model_details(client, backend_client, model_id)
+            if isinstance(details_payload, dict):
+                size = _extract_size_from_details(details_payload)
+                if size == 0 and isinstance(details_payload.get("details"), dict):
+                    size = _extract_size_from_details(details_payload.get("details"))
+        digest = entry.digest or hashlib.sha256(name.encode("utf-8")).hexdigest()
         tags_list.append(
             {
                 "name": name,
                 "model": name,
                 "modified_at": now(),
-                "size": int(entry.size or 0),
-                "digest": entry.digest or "",
+                "size": size,
+                "digest": digest,
                 "details": details,
             }
         )
@@ -286,7 +445,7 @@ class ShowResponse(BaseModel):  # pylint: disable=too-few-public-methods
 
     license: str
     modelfile: str
-    parameters: Dict[str, Any]
+    parameters: str
     template: str
     capabilities: List[str]
     details: Dict[str, Any]
@@ -295,21 +454,68 @@ class ShowResponse(BaseModel):  # pylint: disable=too-few-public-methods
 
 
 @router.post("/api/show", response_model=ShowResponse)
-async def show(req: ShowRequest) -> Response:
+async def show(  # pylint: disable=too-many-locals,too-many-branches
+    req: ShowRequest,
+    client: httpx.AsyncClient = Depends(get_client),
+    model_cache: Optional[ModelCache] = Depends(get_model_cache),
+) -> Response:
     """Return Ollama-compatible model detail payload."""
     name = req.name or req.model or req.id or ""
     if not name:
         return JSONResponse({"error": "missing model name"}, status_code=400)
     model = _ollama_model_name(name)
+    entry: Optional[ModelEntry] = None
+    try:
+        models = await backend_api.models(client, model_cache)
+    except Exception:  # pylint: disable=broad-exception-caught
+        models = ()
+    for candidate in models:
+        mid = _extract_model_id(candidate)
+        if not mid:
+            continue
+        if mid in {name, model} or _ollama_model_name(mid) == model:
+            entry = candidate
+            break
+    backend_client = BackendClient(client, model_cache)
+    details = _build_details_payload(entry)
+    details_payload = await _fetch_model_details(
+        client,
+        backend_client,
+        _extract_model_id(entry) if entry else name,
+    )
+    if isinstance(details_payload, dict):
+        nested = details_payload.get("details")
+        if isinstance(nested, dict):
+            details.update(nested)
+        details.update({k: v for k, v in details_payload.items() if k != "details"})
+    context_length = _extract_context_length(details_payload, details)
+    model_info: Dict[str, Any] = {}
+    architecture = details.get("arch")
+    if isinstance(architecture, str) and architecture:
+        model_info["general.architecture"] = architecture
+        model_key = architecture.replace("_", "")
+        if context_length is not None:
+            model_info[f"{model_key}.context_length"] = context_length
+    family_key = _normalize_family_key(details.get("family") or details.get("arch"))
+    if family_key and context_length is not None:
+        model_info[f"{family_key}.context_length"] = context_length
+    if context_length is not None:
+        model_info["context_length"] = context_length
+    loaded_context_length = _coerce_int(details.get("loaded_context_length"))
+    if loaded_context_length is not None:
+        model_info["loaded_context_length"] = loaded_context_length
+    max_context_length = _coerce_int(details.get("max_context_length"))
+    if max_context_length is not None:
+        model_info["max_context_length"] = max_context_length
     return JSONResponse(
         {
             "license": "unknown",
             "modelfile": "",
-            "parameters": {},
+            "parameters": "",
             "template": "",
             "capabilities": ["completion", "chat", "tools"],
-            "details": {"family": model},
-            "model_info": {},
+            "details": {"family": model, **details},
+            "model_info": model_info,
         }
     )
 

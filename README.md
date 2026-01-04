@@ -7,7 +7,7 @@ used in [Visual Studio Code](https://code.visualstudio.com) and [Co-Pilot](https
 More details on the implementation can be seen at [DETAIL.md](DETAIL.md).
 
 *Note - as this is an Ollama server compatible API, this can also be used for other clients and tools, 
-like [Open-WebUI](https://openwebui.com) - as seen [below](README.md#OpenWebUI-Configuration).*
+like [Open-WebUI](https://openwebui.com), and even the [Ollama CLI](https://docs.ollama.com/cli) (limited API support)  - as seen [below](README.md#OpenWebUI-Configuration).*
 
 ## Why?
 
@@ -153,6 +153,9 @@ docker run -p 11434:11434 -d shim:latest
 
 ### OpenWebUI Model Selector
 ![Open-WebUI Model Selector](pics/OpenWebUISelector.png)
+
+### Ollama CLI
+![Ollama CLI](pics/OllamaCLI.png)
 
 ## TODO
 
