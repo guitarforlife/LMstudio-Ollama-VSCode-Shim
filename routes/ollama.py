@@ -493,14 +493,16 @@ async def show(  # pylint: disable=too-many-locals,too-many-branches
     architecture = details.get("arch")
     if isinstance(architecture, str) and architecture:
         model_info["general.architecture"] = architecture
-        model_key = architecture.replace("_", "")
         if context_length is not None:
-            model_info[f"{model_key}.context_length"] = context_length
+            model_info[f"{architecture}.context_length"] = context_length
+    model_name_key = model.split("/", 1)[-1]
+    if model_name_key and context_length is not None:
+        model_info[f"{model_name_key}.context_length"] = context_length
     entry_id = _extract_model_id(entry) if entry else ""
     family_value = details.get("family")
     if isinstance(family_value, str) and family_value in {name, model, entry_id}:
         family_value = None
-    family_key = _normalize_family_key(family_value or details.get("arch"))
+    family_key = _normalize_family_key(family_value)
     if family_key and context_length is not None:
         model_info[f"{family_key}.context_length"] = context_length
     if context_length is not None:
