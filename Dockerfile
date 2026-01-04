@@ -1,26 +1,28 @@
 FROM python:3.11-slim AS builder
 WORKDIR /app
-
-# Install build deps (if any) and dependencies in one layer
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip wheel --wheel-dir /wheels -r requirements.txt
 
 # Runtime stage
 FROM python:3.11-slim
 WORKDIR /app
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && groupadd -r nonroot \
-    && useradd -r -g nonroot nonroot
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY . .
-RUN chown -R nonroot:nonroot /app
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN groupadd -r nonroot \
+    && useradd -r -g nonroot nonroot \
+    && chown -R nonroot:nonroot /app
+COPY --from=builder /wheels /wheels
+RUN python -m pip install --no-cache-dir /wheels/* \
+    && rm -rf /wheels
+COPY --chown=nonroot:nonroot . .
+
 USER nonroot
-
 ENV SHIM_LMSTUDIO_BASE="http://host.docker.internal:1234/v1"
-
 EXPOSE 11434
-HEALTHCHECK CMD curl -f http://localhost:11434/health || exit 1
+HEALTHCHECK CMD python -c "import urllib.request, sys; urllib.request.urlopen('http://localhost:11434/health').read(); sys.exit(0)"
 
 CMD ["python", "main.py"]
