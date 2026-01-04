@@ -160,6 +160,7 @@ docker run -p 11434:11434 -d shim:latest
 ## TODO
 
 - Explore/Test exposing and using more model settings/configurations
+- Explore LM Studio Python library for tighter integration, pulling model sizs (Ollama CLI list output needs this), etc
 - Increase test coverage
 - Split out backend code for maintainability, support multiple backends/server specifications (by interface)
 - Update to a modern setup/config system with toml
