@@ -164,3 +164,4 @@ docker run -p 11434:11434 -d --name shim shim:latest
 - Increase test coverage
 - Split out backend code for maintainability, support multiple backends/server specifications (by interface)
 - Update to a modern setup/config system with toml
+- Better handle ["choices"][0] for completions/responses - n>1 logging at minimum
