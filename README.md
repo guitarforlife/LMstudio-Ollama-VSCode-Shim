@@ -131,7 +131,7 @@ docker build -t shim:latest .
 To run the docker image:
 
 ```bash
-docker run -p 11434:11434 -d shim:latest
+docker run -p 11434:11434 -d --name shim shim:latest
 ```
 
 ## Screenshots
