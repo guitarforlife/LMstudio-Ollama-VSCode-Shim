@@ -189,6 +189,48 @@ def _normalize_family_key(value: Any) -> Optional[str]:
     return slug or None
 
 
+def _add_context_key(
+    model_info: Dict[str, Any],
+    key: Optional[str],
+    context_length: Optional[int],
+) -> None:
+    """Attach a context_length entry if both key and value exist."""
+    if key and context_length is not None:
+        model_info[f"{key}.context_length"] = context_length
+
+
+def _build_model_info(
+    *,
+    details: Dict[str, Any],
+    details_payload: Optional[Dict[str, Any]],
+    model: str,
+    name: str,
+    entry: Optional[ModelEntry],
+) -> Dict[str, Any]:
+    """Build the model_info payload for /api/show."""
+    context_length = _extract_context_length(details_payload, details)
+    model_info: Dict[str, Any] = {}
+    architecture = details.get("arch")
+    if isinstance(architecture, str) and architecture:
+        model_info["general.architecture"] = architecture
+        _add_context_key(model_info, architecture, context_length)
+    model_name_key = model.split("/", 1)[-1]
+    _add_context_key(model_info, model_name_key, context_length)
+    entry_id = _extract_model_id(entry) if entry else ""
+    family_value = details.get("family")
+    if isinstance(family_value, str) and family_value in {name, model, entry_id}:
+        family_value = None
+    family_key = _normalize_family_key(family_value)
+    _add_context_key(model_info, family_key, context_length)
+    if context_length is not None:
+        model_info["context_length"] = context_length
+    for key in ("loaded_context_length", "max_context_length"):
+        parsed = _coerce_int(details.get(key))
+        if parsed is not None:
+            model_info[key] = parsed
+    return model_info
+
+
 def _extract_size_from_details(details: Optional[Dict[str, Any]]) -> int:
     """Find a non-zero size in common LM Studio fields."""
     details = details or {}
@@ -488,31 +530,13 @@ async def show(  # pylint: disable=too-many-locals,too-many-branches
         if isinstance(nested, dict):
             details.update(nested)
         details.update({k: v for k, v in details_payload.items() if k != "details"})
-    context_length = _extract_context_length(details_payload, details)
-    model_info: Dict[str, Any] = {}
-    architecture = details.get("arch")
-    if isinstance(architecture, str) and architecture:
-        model_info["general.architecture"] = architecture
-        if context_length is not None:
-            model_info[f"{architecture}.context_length"] = context_length
-    model_name_key = model.split("/", 1)[-1]
-    if model_name_key and context_length is not None:
-        model_info[f"{model_name_key}.context_length"] = context_length
-    entry_id = _extract_model_id(entry) if entry else ""
-    family_value = details.get("family")
-    if isinstance(family_value, str) and family_value in {name, model, entry_id}:
-        family_value = None
-    family_key = _normalize_family_key(family_value)
-    if family_key and context_length is not None:
-        model_info[f"{family_key}.context_length"] = context_length
-    if context_length is not None:
-        model_info["context_length"] = context_length
-    loaded_context_length = _coerce_int(details.get("loaded_context_length"))
-    if loaded_context_length is not None:
-        model_info["loaded_context_length"] = loaded_context_length
-    max_context_length = _coerce_int(details.get("max_context_length"))
-    if max_context_length is not None:
-        model_info["max_context_length"] = max_context_length
+    model_info = _build_model_info(
+        details=details,
+        details_payload=details_payload,
+        model=model,
+        name=name,
+        entry=entry,
+    )
     return JSONResponse(
         {
             "license": "unknown",
